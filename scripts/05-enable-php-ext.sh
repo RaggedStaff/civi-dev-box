@@ -46,6 +46,23 @@ _CIVI_SELF="${BASH_SOURCE[0]:-$0}"
 EXT="${CIVICRM_EXT_TO_ENABLE:-intl}"
 MARKER="# managed by civi-dev-box ($EXT)"
 
+# `php --ini` wraps its paths in double quotes on some builds:
+#
+#     Loaded Configuration File: "/etc/php.ini"
+#
+# Capturing the value after the colon therefore keeps the quote characters, and
+# every subsequent write lands in a file literally named '"/etc/php.ini"' in the
+# working directory. PHP is then never actually told to load anything, and the
+# failure looks exactly like "the extension refuses to load". Strip them.
+unquote() {
+  local s="${1:-}"
+  case "$s" in
+    \"*\") s="${s#\"}"; s="${s%\"}" ;;
+    \'*\') s="${s#\'}"; s="${s%\'}" ;;
+  esac
+  printf '%s' "$s"
+}
+
 log "=== enable php extension: ${EXT} ==="
 
 # Capture stderr as well as stdout: when an extension fails to load, PHP prints
@@ -63,9 +80,10 @@ command -v php >/dev/null 2>&1 || die "php not found on PATH"
 
 # --- Discover where PHP actually looks ---------------------------------------
 EXT_DIR="$(php -r 'echo (string) ini_get("extension_dir");' 2>/dev/null || true)"
+EXT_DIR="$(unquote "$EXT_DIR")"
 PHP_API="$(php -r 'echo (string) PHP_VERSION;' 2>/dev/null || true)"
-LOADED_INI="$(php --ini 2>/dev/null | awk -F': *' '/^Loaded Configuration File/{print $2; exit}')"
-SCAN_DIR="$(php --ini 2>/dev/null | awk -F': *' '/^Scan for additional .ini files in/{print $2; exit}')"
+LOADED_INI="$(unquote "$(php --ini 2>/dev/null | awk -F': *' '/^Loaded Configuration File/{print $2; exit}')")"
+SCAN_DIR="$(unquote "$(php --ini 2>/dev/null | awk -F': *' '/^Scan for additional .ini files in/{print $2; exit}')")"
 
 log "php            : ${PHP_API:-<unknown>}"
 log "extension_dir  : ${EXT_DIR:-<unset>}"
@@ -116,6 +134,26 @@ ATTEMPTED=""
 # CLI re-parses it on every invocation, so this is a real check and not a guess.
 try_location() { # $1 = label, $2 = target ini, $3 = 1 for a conf.d drop-in
   local label="$1" target="$2" dropin="$3"
+
+  # Refuse anything that is not a real, existing, absolute directory. Without
+  # this, a malformed path (a stray quote, a missing parent) still "succeeds"
+  # because the shell happily creates whatever it was asked for - and the run
+  # then fails with a misleading "PHP would not load it".
+  case "$target" in
+    /*) : ;;
+    *)  warn "skipping ${label}: '${target}' is not an absolute path"; return 1 ;;
+  esac
+  local parent
+  parent="$(dirname "$target")"
+  if [ ! -d "$parent" ]; then
+    if [ "$dropin" = "1" ] && mkdir -p "$parent" 2>/dev/null && [ -d "$parent" ]; then
+      log "created ${parent} for the ${label}"
+    else
+      warn "skipping ${label}: '${parent}' does not exist"
+      return 1
+    fi
+  fi
+
   ATTEMPTED="${ATTEMPTED}\n    - ${label}: ${target}"
 
   write_directive "$target" "$dropin" \
@@ -210,9 +248,18 @@ fi
 if pgrep -x apache2 >/dev/null 2>&1 || pgrep -x httpd >/dev/null 2>&1 \
    || pgrep -x php-fpm >/dev/null 2>&1; then
   log "a web SAPI is running - sending it a graceful restart to pick up php.ini"
+  # Silence the server's own output: on a container where the master is not yet
+  # up, apachectl tries to START it and prints a page of errors, which buries the
+  # part of the log a human actually reads.
   if command -v apachectl >/dev/null 2>&1; then
-    apachectl -k graceful 2>/dev/null || service apache2 reload >/dev/null 2>&1 || true
+    apachectl -k graceful >/dev/null 2>&1 \
+      || service apache2 reload >/dev/null 2>&1 \
+      || systemctl reload apache2 >/dev/null 2>&1 \
+      || warn "could not reload the web SAPI; restart the node if intl is missing under it"
   elif command -v systemctl >/dev/null 2>&1; then
-    systemctl reload apache2 >/dev/null 2>&1 || systemctl reload httpd >/dev/null 2>&1 || true
+    systemctl reload apache2 >/dev/null 2>&1 || systemctl reload httpd >/dev/null 2>&1 \
+      || warn "could not reload the web SAPI; restart the node if intl is missing under it"
+  else
+    warn "no apachectl or systemctl here; restart the node so the web SAPI picks up php.ini"
   fi
 fi

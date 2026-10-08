@@ -43,6 +43,39 @@ wrong yields an ini edit that silently does nothing.
 
 Set `CIVICRM_EXT_TO_ENABLE=<name>` to use it for a different extension.
 
+## Gotcha: `php --ini` quotes its paths
+
+On this platform, `php --ini` reports:
+
+```
+Loaded Configuration File: "/etc/php.ini"
+Scan for additional .ini files in: "/etc/php.d"
+```
+
+**with the double quotes included.** Anything that parses that output by
+splitting on the colon keeps the quote characters, so the "path" becomes
+`"/etc/php.ini"` and:
+
+- `>> '"/etc/php.ini"'` creates a file literally named `"/etc/php.ini"` in the
+  current working directory
+- `mkdir -p "$(dirname '"/etc/php.d"/civi-intl.ini')"` creates a directory
+  literally named `"` and hangs the rest of the path off it
+
+Both *succeed*, so nothing looks wrong until you notice PHP was never actually
+told to load anything. The symptom is a failure that reads exactly like "this
+PHP build cannot load `intl.so`", which sends you looking for an API-version
+mismatch that isn't there.
+
+Two defences, both in `05-enable-php-ext.sh`:
+
+- strip the surrounding quotes when parsing
+- refuse to write unless the target is an **absolute** path whose parent
+  directory exists, so a malformed path can never masquerade as a successful
+  write
+
+`extension_dir` comes from `php -r 'echo ini_get("extension_dir");'` rather than
+`php --ini`, which is why it was never affected.
+
 ## The ephemeral case
 
 A compiled extension lives in the container filesystem, not on the volume, so a
