@@ -36,24 +36,81 @@ fi
 log "CLI PHP: $($CLI_PHP_REAL -r 'echo PHP_VERSION;')"
 
 # --- PHP ini budgets --------------------------------------------------------
+# CiviCRM's documented minimums are 256M / 240 / 50M / 50M; 20-fetch-civicrm.sh
+# raises memory_limit to 512M, so anything at or above the minimum is fine.
+#
+# Note the CLI reads NEITHER .user.ini (CGI/FastCGI only) NOR .htaccess php_value
+# (mod_php only) - those are per-directory web-SAPI mechanisms. So these values
+# are what `cv` and the cron jobs actually run under, governed by the platform's
+# global php.ini. Report rather than die: the web SAPI serves requests, and a
+# low CLI memory_limit does not block installation. It does mean a long import
+# can pass in the browser and time out in cron.
+# Normalise a php.ini shorthand (256M, 1G, 1024K) to bytes.
+#
+# The value goes through the environment rather than `php -r "$code" "$value"`,
+# because a value like "-1" would be parsed by PHP's own CLI as an option and
+# dump its usage text into the comparison.
+ini_min_bytes() {
+  INI_VALUE="$1" php 2>/dev/null <<'PHP'
+<?php
+$v = trim((string) getenv('INI_VALUE'));
+if (preg_match('/^(\d+)([KMG]?)$/i', $v, $m)) {
+    $n = (int) $m[1];
+    switch (strtoupper($m[2])) {
+        case 'K': $n *= 1024; break;
+        case 'M': $n *= 1024 * 1024; break;
+        case 'G': $n *= 1024 * 1024 * 1024; break;
+    }
+    echo $n;
+}
+PHP
+}
+
 check_ini() {
-  local key="$1" want="$2" got
-  got="$(php -r "echo ini_get('$key') ?: '0';")"
-  # Compare in bytes where numeric, else just report.
-  if [ "$got" != "$got" ]; then die "ini $key is non-numeric: $got"; fi
-  log "ini ${key} = ${got} (want >= ${want})"
+  local key="$1" want="$2" got got_b want_b
+  got="$(php -r "echo ini_get('$key') ?: '';")"
+
+  # -1 means "no limit", which trivially satisfies any minimum.
+  if [ "$got" = "-1" ]; then
+    log "ini ${key} = unlimited (>= ${want})"
+    return 0
+  fi
+
+  got_b="$(ini_min_bytes "$got")"
+  want_b="$(ini_min_bytes "$want")"
+
+  if [ -z "$got_b" ] || [ -z "$want_b" ]; then
+    log "ini ${key} = ${got:-<unset>} (want >= ${want})"
+    return 0
+  fi
+
+  if [ "$got_b" -ge "$want_b" ]; then
+    log "ini ${key} = ${got} (>= ${want})"
+  elif [ "$key" = "memory_limit" ]; then
+    warn "ini ${key} = ${got}, CiviCRM wants >= ${want}. Long imports may fail.
+    The web SAPI gets 512M from .user.ini/.htaccess; the CLI SAPI follows the
+    platform's global php.ini, so cv and cron keep the lower value."
+  else
+    warn "ini ${key} = ${got}, CiviCRM wants >= ${want}."
+  fi
 }
 check_ini memory_limit        256M
 check_ini max_execution_time  240
 check_ini post_max_size       50M
 check_ini upload_max_filesize 50M
 
-# --- FPM/applier sanity -----------------------------------------------------
-if php -i | grep -qi "fpm"; then
-  log "PHP SAPI appears to be FPM; per-directory .user.ini overrides will apply."
-else
-  warn "PHP SAPI is $(php -r 'echo PHP_SAPI;') - .user.ini overrides may not be honoured."
-fi
+# --- SAPI reporting ---------------------------------------------------------
+# Decides which of the two ini mechanisms 20-fetch-civicrm.sh actually uses:
+#   fpm/fcgi -> .user.ini    |    mod_php -> .htaccess php_value
+log "PHP SAPI: $(php -r 'echo PHP_SAPI;')"
+case "$(php -r 'echo PHP_SAPI;')" in
+  fpm|fpm-fcgi|cgi-fcgi)
+    log "FPM/CGI: .user.ini in the project root is the effective override." ;;
+  apache2handler|apache)
+    log "mod_php: the .htaccess php_value block is the effective override." ;;
+  *)
+    warn "unusual SAPI - neither .user.ini nor .htaccess php_value is guaranteed to apply." ;;
+esac
 
 # --- Disk ------------------------------------------------------------------
 AVAIL_MB="$(df -Pm "$HOME" | awk 'NR==2 {print $4}')"
