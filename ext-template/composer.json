@@ -1,0 +1,16 @@
+{
+  "name": "yourorg/civicrm-ext-template",
+  "description": "Blank CiviCRM native extension - dev box deploy fixture.",
+  "type": "civicrm-extension",
+  "license": "AGPL-3.0-or-later",
+  "require": {
+    "php": ">=8.2",
+    "ext-json": "*"
+  },
+  "extra": {
+    "civicrm": {
+      "extension_key": "ext-template",
+      "label": "Extension Template"
+    }
+  }
+}

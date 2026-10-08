@@ -1,0 +1,14 @@
+.env
+*.local
+.DS_Store
+
+# Runtime artefacts from local experimentation
+/tmp/
+vendor/
+node_modules/
+*.log
+
+# Never commit credentials
+*.pem
+id_rsa*
+.jelastic-credentials

@@ -1,0 +1,314 @@
+# =============================================================================
+# CiviCRM Standalone dev box  --  JPS / Cloud Scripting manifest
+# =============================================================================
+# The "install image". Import into Virtuozzo Application Platform:
+#   Dashboard > Import > JPS, or:  jps deploy -u <jps-url> -e <api-endpoint>
+#
+# Target: app.jpe.infomaniak.com (Jelastic PaaS, public provider)
+# Site:   https://dev.civi.sioldata.com
+#
+# Stack (deliberately pinned):
+#   app server : apache (Apache + PHP)
+#   php        : 8.4.26   <-- deliberately NOT 8.5, see the phpTag field
+#   database   : mariadb-dockerized 11.8.9 (LTS)
+#   civicrm    : 6.18.2 Standalone
+#
+# WHY PHP 8.4 AND NOT 8.5
+#   Sole reason: the extension, not the platform. CiviCRM core is happy on 8.5 -
+#   its requirements page lists 8.3/8.4/8.5 all as "compatible and recommended".
+#
+#   But dfc_civicrm's info.xml declares:
+#     <php_compatibility><ver>8.1</ver>8.2 8.3 8.4</php_compatibility>
+#   8.5 is outside that range and CiviCRM enforces the declared range when
+#   registering an extension, so `cv ext:enable` would refuse it. Hard blocker.
+#
+#   To move to 8.5.11: add <ver>8.5</ver> to the extension's info.xml FIRST,
+#   then change this tag. Changing only the tag breaks registration.
+#
+# WHAT THIS MANIFEST DOES *NOT* DO
+#   It does not deploy the extension. The extension has no git remote and its
+#   vendor/ + composer.lock are gitignored, so there is nothing to fetch here.
+#   It is deployed afterwards as a built archive - see README and
+#   `make ext-deploy` / `make ext-verify`. The onInstall step below still
+#   supports a source URL for completeness, but expect to leave it blank.
+# =============================================================================
+type: install
+version: 1.0
+name: CiviCRM Standalone Dev Box (dfc_civicrm)
+description: |
+  CiviCRM Standalone on Apache/PHP + MariaDB, tuned to CiviCRM's
+  documented requirements, for testing the dfc_civicrm native extension.
+
+  * CiviCRM 6.18.2 Standalone served from the domain root (as required)
+  * PHP 8.4.26, MariaDB 11.8.9
+  * Database tuned: sql_mode without ONLY_FULL_GROUP_BY/ANSI, utf8mb4,
+    thread_stack 256k, trusted function creators
+  * private/, public/, ext/ on persistent volumes; survive redeploy
+  * Release code re-materialised automatically on container restart
+  * Demo data is a deployment-time choice
+
+  The extension itself is deployed separately as a built archive - the
+  manifest deliberately does not try to fetch it.
+homepage: https://dev.civi.sioldata.com
+appVersion: 6.18.2
+displayName: ${settings.envName}
+skipNodeEmails: true
+
+categories:
+  - cms
+  - php
+  - crm
+
+# -----------------------------------------------------------------------------
+# Deployment-time choices
+# -----------------------------------------------------------------------------
+settings:
+  fields:
+    - caption: Environment name
+      type: string
+      name: envName
+      default: civi-dev
+      hideLabel: false
+      description: Name shown in the dashboard for this environment.
+
+    - caption: Site URL
+      type: string
+      name: siteUrl
+      default: "https://dev.civi.sioldata.com"
+      hideLabel: false
+      description: |
+        Baked into the install by `cv core:install --cms-base-url`. Must be the
+        final stable URL - changing it later means re-installing.
+
+    - caption: Install CiviCRM demo (sample) data
+      type: checkbox
+      name: demoData
+      default: false
+      hideLabel: false
+      description: |
+        Off = empty site, installs in ~1 minute. On = realistic
+        contacts/contributions to test against, much slower.
+
+    - caption: CiviCRM version
+      type: string
+      name: civicrmVersion
+      default: 6.18.2
+      hideLabel: false
+
+    - caption: PHP tag
+      type: string
+      name: phpTag
+      default: "8.4.26"
+      hideLabel: false
+      description: |
+        DEFAULT IS 8.4 ONLY BECAUSE OF THE EXTENSION. CiviCRM core is happy on
+        8.5 (its docs list 8.3/8.4/8.5 as "compatible and recommended"), but
+        dfc_civicrm's info.xml declares php_compatibility 8.1-8.4 and CiviCRM
+        enforces that range at registration time. Add <ver>8.5</ver> to the
+        extension's info.xml first, then raise this.
+
+    - caption: MariaDB tag
+      type: string
+      name: mariadbTag
+      default: "11.8.9"
+      hideLabel: false
+      description: 11.4 or 11.8 LTS recommended by CiviCRM.
+
+    - caption: PHP cloudlets
+      type: spinner
+      name: cpCloudlets
+      increment: 2
+      default: 8
+      min: 4
+      description: CiviCRM is memory hungry. 8 recommended, 4 is the minimum.
+
+    - caption: MariaDB cloudlets
+      type: spinner
+      name: dbCloudlets
+      increment: 2
+      default: 4
+      min: 4
+
+    - caption: Administrator email
+      type: string
+      name: adminEmail
+      default: admin@sioldata.com
+      hideLabel: false
+
+    - caption: Administrator password
+      type: password
+      name: adminPass
+      default: civiAdmin!2026
+      hideLabel: false
+
+    - caption: Database password
+      type: password
+      name: dbPass
+      default: civiDb!2026
+      hideLabel: false
+      description: |
+        Supplied rather than generated so the database node and the PHP node use
+        the same credentials without cross-node plumbing.
+
+    - caption: Persistent data directory
+      type: string
+      name: dataDir
+      default: /var/lib/civicrm-data
+      hideLabel: false
+
+    - caption: Extension key
+      type: string
+      name: extKey
+      default: "dfc_civicrm"
+      hideLabel: false
+      description: |
+        Must equal the <key> in the extension's info.xml AND the directory name
+        CiviCRM resolves to (<ext-dir>/<key>/<file>.php).
+
+    - caption: Extension source (optional - usually leave blank)
+      type: string
+      name: extSource
+      default: ""
+      hideLabel: false
+      description: |
+        Only for a remote-pushed copy of the extension. dfc_civicrm has no git
+        remote and its vendor/ is gitignored, so prefer the archive workflow:
+        `make ext-deploy`. Blank = deploy the site only.
+
+# -----------------------------------------------------------------------------
+# Topology
+# -----------------------------------------------------------------------------
+nodes:
+  # apachephp-dockerized (Apache + PHP), NOT nginxphp.
+  #
+  # CiviCRM's Standalone release ships .htaccess files - that is the mechanism it
+  # uses to keep private/ unreadable from the web and to route /civicrm/* through
+  # its front controller. NGINX ignores .htaccess, so on NGINX those rules must
+  # be reimplemented in a vhost by hand. Apache honours them as shipped.
+  #
+  # (dfc_civicrm itself registers its routes through xml/Menu/dfc_civicrm.xml,
+  # so it needs no rewriting - but CiviCRM core still does, and Apache gets that
+  # for free.)
+  # nodeType `apache` is the documented Cloud Scripting identifier for the
+  # Apache+PHP template (alias: apache2). There is no "apachephp-dockerized".
+  - nodeType: apache
+    nodeGroup: cp
+    displayName: CiviCRM
+    engine: php8.4
+    tag: ${settings.phpTag}
+    cloudlets: ${settings.cpCloudlets}
+    scalingMode: STATELESS
+    diskLimit: 20
+    isRedeploySupport: true
+    isDeploySupport: false
+    volumes:
+      - ${settings.dataDir}
+    links:
+      - sqldb:DB
+    env:
+      CIVICRM_DATA_DIR: ${settings.dataDir}
+      CIVICRM_VERSION: ${settings.civicrmVersion}
+      CIVICRM_SITE_URL: ${settings.siteUrl}
+      CIVICRM_DB_NAME: civicrm
+      CIVICRM_DB_USER: civicrm
+      CIVICRM_DB_PASS: ${settings.dbPass}
+      CIVICRM_DB_PORT: "3306"
+      CIVICRM_ADMIN_USER: admin
+      CIVICRM_ADMIN_PASS: ${settings.adminPass}
+      CIVICRM_ADMIN_EMAIL: ${settings.adminEmail}
+      CIVICRM_DEMO_DATA: ${settings.demoData}
+      CIVICRM_EXT_KEY: ${settings.extKey}
+      CIVICRM_EXT_SOURCE: ${settings.extSource}
+
+  - nodeType: mariadb-dockerized
+    nodeGroup: sqldb
+    displayName: MariaDB
+    tag: ${settings.mariadbTag}
+    cloudlets: ${settings.dbCloudlets}
+    diskLimit: 20
+    scalingMode: STATEFUL
+    isRedeploySupport: true
+    isDeploySupport: false
+    volumes:
+      - /var/lib/mysql
+      - /var/log/mysql
+
+# -----------------------------------------------------------------------------
+# Provisioning
+#
+# Scripts are fetched over HTTP from ${baseUrl}. Point baseUrl at a public raw
+# URL for this repo, or override per-run with:  jps deploy -s baseUrl=<url>
+#
+# Without a reachable baseUrl the environment still creates; only the
+# provisioning steps are skipped. You can then run the same scripts by hand over
+# SSH:  make up
+# -----------------------------------------------------------------------------
+baseUrl: https://raw.githubusercontent.com/raggedstaff/civi-dev-box/main/
+
+onInstall:
+
+  # --- 1. Fail fast if the runtime does not satisfy CiviCRM --------------
+  - cmd [cp]: curl -fsS ${baseUrl}scripts/00-preflight.sh | bash -s
+      || die 'preflight failed'
+
+  # --- 2. Database: tuning + schema/user --------------------------------
+  - cmd [sqldb]: curl -fsS ${baseUrl}scripts/10-db-tune.sh \
+        | bash -s -- 'civicrm' '${settings.dbPass}'
+
+  # --- 3. Release code into the document root + bind volumes ------------
+  - cmd [cp]: curl -fsS ${baseUrl}scripts/20-fetch-civicrm.sh \
+        | CIVICRM_VERSION='${settings.civicrmVersion}' bash -s
+
+  # --- 4. Non-interactive install ----------------------------------------
+  - cmd [cp]: curl -fsS ${baseUrl}scripts/30-install-civicrm.sh \
+        | CIVICRM_SITE_URL='${settings.siteUrl}' bash -s
+
+  # --- 5. Optional source-based extension deploy ------------------------
+  # Skipped unless extSource is set. The dfc_civicrm archive workflow
+  # (make ext-deploy) is the normal path.
+  - if:
+      condition: ${settings.extSource}
+      then:
+        - cmd [cp]: curl -fsS ${baseUrl}scripts/40-install-extension.sh \
+              | CIVICRM_SITE_URL='${settings.siteUrl}' bash -s -- --link
+
+# Self-heal: the app tree is ephemeral, so re-materialise the release code
+# every time the PHP container restarts. Data volumes are untouched, so this is
+# cheap and idempotent.
+onAfterRestartNode [cp]:
+  - cmd [cp]: curl -fsS ${baseUrl}scripts/20-fetch-civicrm.sh \
+        | CIVICRM_VERSION='${settings.civicrmVersion}' bash -s
+
+startPage: ${settings.siteUrl}/civicrm/login
+
+success: |
+  ### CiviCRM dev box is ready
+
+  - **Site**: ${settings.siteUrl}/civicrm/login
+  - **Admin**: `${settings.adminEmail}` / your chosen password
+  - **PHP**: `${settings.phpTag}` &nbsp;&nbsp; **DB**: `${settings.mariadbTag}` &nbsp;&nbsp; **CiviCRM**: `${settings.civicrmVersion}`
+  - **Demo data**: `${settings.demoData}`
+
+  #### 1. Confirm private/ is not web-readable
+
+      curl -sI ${settings.siteUrl}/private/civicrm.settings.php   # expect 403/404
+
+  Apache honours the release's own .htaccess rules, so this should already hold.
+
+  #### 2. Deploy the extension (not done by this manifest)
+
+  The extension is deployed as a built archive, because dfc_civicrm has no git
+  remote and its `vendor/` is gitignored. From your workstation:
+
+      make ext-build      # runs the extension's own tools/build-release.sh
+      make ext-deploy     # uploads the archive and runs cv ext:enable
+      make ext-verify     # runs the extension's own tools/verify-install.sh
+
+  #### 3. Add cron (one-time, not scriptable from JPS)
+
+  Dashboard > CUSTOMER > Cron Jobs, using `ops/crontab`.
+
+  #### 3. App server
+
+  Apache is used deliberately: the CiviCRM release protects `private/` with
+  `.htaccess`, which only Apache honours. Nothing further to configure.

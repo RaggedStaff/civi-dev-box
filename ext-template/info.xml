@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<ExtensionDefinition xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                     xsi:noNamespaceSchemaLocation="https://civicrm.org/xml/schema/extension/extension.xsd">
+  <Id>ext-template</Id>
+  <version>1.0.0</version>
+  <label>Extension Template</label>
+  <description>Blank CiviCRM native extension used to exercise the dev box deploy path.</description>
+
+  <!-- CiviCRM core version this extension supports. If you change this to a
+       version the dev box is not running, the install will fail fast, which is
+       exactly what you want while testing. -->
+  <civicrm>
+    <min_version>6.18</min_version>
+    <max_version>6.99</max_version>
+  </civicrm>
+
+  <namespace>Template</namespace>
+
+  <!-- Required. CiviCRM scans the ext directory for this declaration. -->
+  <extension>
+    <class>CRM_Template_Extension_Template</class>
+  </extension>
+
+  <!-- Uncomment to declare a service (runs on every form request).
+  <services>
+    <service class="CRM_Template_Service_MyService" />
+  </services>
+  -->
+
+  <!-- Uncomment to add a page under Administer.
+  <pages>
+    <page name="admin/extension/template" url="civicrm/admin/extension/template" weight="90" />
+  </pages>
+  -->
+
+  <!-- Hooks, e.g. build menu, alter queries. See the developer guide.
+  <hooks>
+    <hook name="civicrm_config" />
+  </hooks>
+  -->
+
+  <files>
+    <!-- Must resolve to CRM/Template/Extension/Template.php: CiviCRM's autoloader
+         maps CRM_<Namespace>_<Class> to CRM/<Namespace>/<subpath>/<Class>.php
+         relative to the extension root. It does NOT look in src/. -->
+    <file key="template" name="CRM_Template_Extension_Template.php" />
+  </files>
+
+  <!-- Run order relative to other extensions; lower runs first. -->
+  <!-- Run order is the numeric prefix: 001_* on install, then each new numbered
+       file on upgrade, in ascending order. Keep the .uninstall.sql suffix paired
+       with its install file - CiviCRM pairs them by name. -->
+  <install>
+    <sql file="sql/001_civicrm_template_schema.sql" />
+  </install>
+  <uninstall>
+    <sql file="sql/001_civicrm_template_schema.uninstall.sql" />
+  </uninstall>
+
+  <schemaVersion>1.0</schemaVersion>
+</ExtensionDefinition>

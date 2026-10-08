@@ -1,0 +1,32 @@
+# =============================================================================
+# CiviCRM required cron jobs
+# =============================================================================
+# CiviCRM will not send scheduled mailings, run the job queue, process
+# membership status/renewal rules, or fire reminders without these.
+#
+# Jelastic runs scheduled jobs under the container user, which is also the user
+# the webserver runs as - so file permissions are consistent. Add them via
+# Dashboard > CUSTOMER > Cron Jobs (or by SSH with `crontab -e`).
+#
+# SITE must be the application directory containing civicrm.standalone.php.
+# Find it with:  find $HOME -name civicrm.standalone.php
+# ---------------------------------------------------------------------------
+
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+SITE=/var/www/app
+CV=/home/jelastic/bin/cv
+
+# Run the job queue every minute. This is the one that matters most: it drives
+# scheduled reminders, membership status updates, and any extension that
+# registers a scheduled job.
+* * * * * cd $SITE && $CV -f -n civicrm -l en_US $SITE core:job --user=1 >> $SITE/private/log/cron.log 2>&1
+
+# Process queued outgoing mail. Kept separate from core:job so a mail backlog
+# cannot starve the job queue (and vice versa).
+*/5 * * * * cd $SITE && $CV -f -n civicrm -l en_US $SITE core:sendmail --user=1 >> $SITE/private/log/cron.log 2>&1
+
+# Rebuild the search (CMSContent / profile) index nightly. Standalone sites are
+# small so a nightly run is ample; raise the frequency only if you import bulk
+# data.
+17 3 * * * cd $SITE && $CV -f -n civicrm -l en_US $SITE core:update:safe-permissions >> $SITE/private/log/cron.log 2>&1
