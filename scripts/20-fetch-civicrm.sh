@@ -8,7 +8,13 @@
 # already present it is left alone; only the volume symlinks are repaired.
 set -euo pipefail
 # shellcheck source=lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+_CIVI_SELF="${BASH_SOURCE[0]:-$0}"
+. "$(dirname "$_CIVI_SELF")/lib.sh" || {
+  echo "civi: cannot source lib.sh (looked next to '${_CIVI_SELF}')" >&2
+  echo "civi: run this script as a FILE - piping it into 'bash -s' leaves BASH_SOURCE unset." >&2
+  echo "civi: JPS hooks must use: curl -fsS <url> -o \$d/NAME.sh && bash \$d/NAME.sh" >&2
+  exit 1
+}
 
 log "=== fetch civicrm ${CIVICRM_VERSION} ==="
 

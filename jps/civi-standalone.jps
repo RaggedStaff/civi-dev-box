@@ -1,8 +1,13 @@
 # =============================================================================
 # CiviCRM Standalone dev box  --  JPS / Cloud Scripting manifest
 # =============================================================================
-# The "install image". Import into Virtuozzo Application Platform:
-#   Dashboard > Import > JPS, or:  jps deploy -u <jps-url> -e <api-endpoint>
+# The "install image". Install it via the Dashboard:
+#   Dashboard > Import > Import manifest, then paste this URL:
+#   https://raw.githubusercontent.com/RaggedStaff/civi-dev-box/main/jps/civi-standalone.jps
+#
+# There is no `jps` CLI - JPS is the manifest format, not a command. For a
+# scripted install see "Deploying" in the README, which uses the Jelastic REST
+# API endpoint environment/control/importmanifest.
 #
 # Target: app.jpe.infomaniak.com (Jelastic PaaS, public provider)
 # Site:   https://dev.civi.sioldata.com
@@ -233,12 +238,20 @@ nodes:
     volumes:
       - /var/lib/mysql
       - /var/log/mysql
+    # 10-db-tune.sh creates the schema and user from these. Without them it
+    # would die with "CIVICRM_DB_PASS must be provided" - it reads the
+    # environment, never positional arguments.
+    env:
+      CIVICRM_DB_NAME: civicrm
+      CIVICRM_DB_USER: civicrm
+      CIVICRM_DB_PASS: ${settings.dbPass}
 
 # -----------------------------------------------------------------------------
 # Provisioning
 #
 # Scripts are fetched over HTTP from ${baseUrl}. Point baseUrl at a public raw
-# URL for this repo, or override per-run with:  jps deploy -s baseUrl=<url>
+# URL for this repo, or override it as an extra setting on the API import call
+# (see "Deploying" in the README).
 #
 # Without a reachable baseUrl the environment still creates; only the
 # provisioning steps are skipped. You can then run the same scripts by hand over
@@ -248,37 +261,62 @@ baseUrl: https://raw.githubusercontent.com/raggedstaff/civi-dev-box/main/
 
 onInstall:
 
+  # --- 0. Fetch the scripts to a real directory ----------------------------
+  # Scripts MUST be run as files, not piped into `bash -s`.
+  #
+  # When bash reads a script from stdin, BASH_SOURCE is unset - $0 is just
+  # "bash". Every script's `. lib.sh` line then resolved to "/lib.sh", so the
+  # whole install died with:
+  #     bash: line 9: BASH_SOURCE[0]: unbound variable
+  #     bash: line 9: /lib.sh: No such file or directory
+  # Writing to $d fixes that and puts lib.sh next to each script, which is
+  # where the scripts look for it.
+  #
+  # curl || wget because the mariadb-dockerized image may not ship curl. The
+  # trailing `|| exit 1` matters: a silent fetch failure would otherwise leave a
+  # zero-byte script and fail later with a much more confusing message.
+  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 00-preflight.sh 20-fetch-civicrm.sh 30-install-civicrm.sh 40-install-extension.sh 90-healthcheck.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
+
+  - cmd [sqldb]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 10-db-tune.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
+
   # --- 1. Fail fast if the runtime does not satisfy CiviCRM --------------
-  - cmd [cp]: curl -fsS ${baseUrl}scripts/00-preflight.sh | bash -s
-      || die 'preflight failed'
+  # Note the deliberate absence of `|| die '...'`. die() is a function from our
+  # own lib.sh; it does not exist in the shell Jelastic runs cmd entries in, so
+  # using it replaced the real exit status with "die: command not found" (127)
+  # and hid the actual failure. A non-zero exit already aborts the install.
+  - cmd [cp]: bash "$HOME/.civi-scripts/00-preflight.sh"
 
   # --- 2. Database: tuning + schema/user --------------------------------
-  - cmd [sqldb]: curl -fsS ${baseUrl}scripts/10-db-tune.sh \
-        | bash -s -- 'civicrm' '${settings.dbPass}'
+  # No arguments: 10-db-tune.sh reads CIVICRM_DB_NAME / _USER / _PASS from the
+  # environment (see the sqldb node's env block). It was previously handed the
+  # password as '$1', which the script never read - so it would have died on an
+  # empty password even with the sourcing fixed.
+  - cmd [sqldb]: bash "$HOME/.civi-scripts/10-db-tune.sh"
 
   # --- 3. Release code into the document root + bind volumes ------------
-  - cmd [cp]: curl -fsS ${baseUrl}scripts/20-fetch-civicrm.sh \
-        | CIVICRM_VERSION='${settings.civicrmVersion}' bash -s
+  # CIVICRM_VERSION and CIVICRM_SITE_URL come from the cp node's env block.
+  - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
 
   # --- 4. Non-interactive install ----------------------------------------
-  - cmd [cp]: curl -fsS ${baseUrl}scripts/30-install-civicrm.sh \
-        | CIVICRM_SITE_URL='${settings.siteUrl}' bash -s
+  - cmd [cp]: bash "$HOME/.civi-scripts/30-install-civicrm.sh"
 
   # --- 5. Optional source-based extension deploy ------------------------
   # Skipped unless extSource is set. The dfc_civicrm archive workflow
-  # (make ext-deploy) is the normal path.
+  # (make ext-install) is the normal path.
   - if:
       condition: ${settings.extSource}
       then:
-        - cmd [cp]: curl -fsS ${baseUrl}scripts/40-install-extension.sh \
-              | CIVICRM_SITE_URL='${settings.siteUrl}' bash -s -- --link
+        # No `--` separator: with the script as a file, everything after the
+        # filename is already a positional parameter, so `bash f -- --link`
+        # would pass "$1=--" and the argument parser would reject it.
+        - cmd [cp]: bash "$HOME/.civi-scripts/40-install-extension.sh" --link
 
 # Self-heal: the app tree is ephemeral, so re-materialise the release code
 # every time the PHP container restarts. Data volumes are untouched, so this is
 # cheap and idempotent.
 onAfterRestartNode [cp]:
-  - cmd [cp]: curl -fsS ${baseUrl}scripts/20-fetch-civicrm.sh \
-        | CIVICRM_VERSION='${settings.civicrmVersion}' bash -s
+  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 20-fetch-civicrm.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
+  - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
 
 startPage: ${settings.siteUrl}/civicrm/login
 

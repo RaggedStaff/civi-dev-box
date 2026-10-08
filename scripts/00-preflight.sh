@@ -6,7 +6,13 @@
 # ("the platform is wrong") rather than a confusing installer failure later.
 set -euo pipefail
 # shellcheck source=lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+_CIVI_SELF="${BASH_SOURCE[0]:-$0}"
+. "$(dirname "$_CIVI_SELF")/lib.sh" || {
+  echo "civi: cannot source lib.sh (looked next to '${_CIVI_SELF}')" >&2
+  echo "civi: run this script as a FILE - piping it into 'bash -s' leaves BASH_SOURCE unset." >&2
+  echo "civi: JPS hooks must use: curl -fsS <url> -o \$d/NAME.sh && bash \$d/NAME.sh" >&2
+  exit 1
+}
 
 log "=== preflight ==="
 
@@ -31,7 +37,9 @@ log "required PHP extensions: OK"
 CLI_PHP_BIN="$(command -v php)"
 CLI_PHP_REAL="$(php -r 'echo PHP_BINARY;')"
 if [ -n "$CLI_PHP_REAL" ] && [ "$CLI_PHP_REAL" != "$CLI_PHP_BIN" ]; then
-  warn "multiple PHP binaries: 'php' -> ${CLI_PHP_REAL}. `cv` inherits whatever the cron/PATH uses."
+  # Single quotes around cv, not backticks: shellcheck flags SC2006 here and
+  # the suggested "fix" rewrites it to $(cv), which would EXECUTE cv.
+  warn "multiple PHP binaries: 'php' -> ${CLI_PHP_REAL}. 'cv' inherits whatever the cron/PATH uses."
 fi
 log "CLI PHP: $($CLI_PHP_REAL -r 'echo PHP_VERSION;')"
 

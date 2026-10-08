@@ -118,20 +118,43 @@ git remote -v      # push this repo to your org
 #   baseUrl: https://raw.githubusercontent.com/<org>/civi-dev-box/main/
 ```
 
-### 2. Deploy the environment
+### 2. Install the environment
+
+There is **no `jps` CLI** — JPS is the *manifest format*, not a command. Two ways
+to install it:
+
+**Dashboard (recommended).** Log in to `https://app.jpe.infomaniak.com` →
+**Import → Import manifest**, then paste:
+
+```
+https://raw.githubusercontent.com/RaggedStaff/civi-dev-box/main/jps/civi-standalone.jps
+```
+
+The form exposes every setting field, so `envName`, `siteUrl`, `phpTag`,
+`dbPass` etc. are all editable before you commit to the install.
+
+**REST API (scriptable).** The Dashboard's own import action calls:
 
 ```bash
 export JELASTIC_API="https://app.jpe.infomaniak.com/1.0"
-export JPS_URL="https://raw.githubusercontent.com/<org>/civi-dev-box/main/jps/civi-standalone.jps"
+export JPS_URL="https://raw.githubusercontent.com/RaggedStaff/civi-dev-box/main/jps/civi-standalone.jps"
+export JELASTIC_SESSION="..."   # see below
 
-jps deploy -u "$JPS_URL" -e "$JELASTIC_API" \
-  -s envName=civi-dev \
-  -s siteUrl=https://dev.civi.sioldata.com \
-  -s phpTag=8.4.26 \
-  -s demoData=false
+curl -sG "${JELASTIC_API}/environment/control/importmanifest" \
+  --data-urlencode "session=${JELASTIC_SESSION}" \
+  --data-urlencode "manifestUrl=${JPS_URL}" \
+  --data-urlencode "envName=civi-dev" \
+  --data-urlencode "siteUrl=https://dev.civi.sioldata.com" \
+  --data-urlencode "phpTag=8.4.26" \
+  --data-urlencode "demoData=false"
 ```
 
-Or Dashboard → Import → JPS. The form exposes every setting.
+Every `settings.fields` entry in the manifest is a query parameter of the same
+name; `baseUrl` can be overridden the same way. To get a session token, copy the
+`session` value out of any Dashboard API request (dev tools → Network), or use
+`POST ${JELASTIC_API}/users/authentication/rest-api` if your provider has REST
+authentication enabled. `make deploy` wraps the curl above if you'd rather not
+type it.
 
 ### 3. Deploy the extension
 

@@ -145,10 +145,14 @@ shell: ## Interactive SSH into the box
 # MANIFEST DEPLOY
 # =============================================================================
 .PHONY: deploy
-deploy: ## Deploy the JPS manifest
+deploy: ## Install the JPS manifest via the Jelastic REST API
 	@test -n "$(JPS_URL)" || { echo "Set JPS_URL to the public URL of jps/civi-standalone.jps"; exit 1; }
 	@test -n "$(JELASTIC_API)" || { echo "Set JELASTIC_API (e.g. https://app.jpe.infomaniak.com/1.0)"; exit 1; }
-	jps deploy -u "$(JPS_URL)" -e "$(JELASTIC_API)" $(JPS_OPTS)
+	@test -n "$(JELASTIC_SESSION)" || { echo "Set JELASTIC_SESSION to your Jelastic API session token"; exit 1; }
+	curl -fsSG "$(JELASTIC_API)/environment/control/importmanifest" \
+	  --data-urlencode "session=$(JELASTIC_SESSION)" \
+	  --data-urlencode "manifestUrl=$(JPS_URL)" \
+	  $(JPS_OPTS)
 
 .PHONY: validate
 validate: ## Sanity-check the manifest locally
