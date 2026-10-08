@@ -14,21 +14,30 @@
 #
 # Stack (deliberately pinned):
 #   app server : apache (Apache + PHP)
-#   php        : 8.4.26   <-- deliberately NOT 8.5, see the phpTag field
+#   php        : 8.5.11
 #   database   : mariadb-dockerized 11.8.9 (LTS)
 #   civicrm    : 6.18.2 Standalone
 #
-# WHY PHP 8.4 AND NOT 8.5
-#   Sole reason: the extension, not the platform. CiviCRM core is happy on 8.5 -
-#   its requirements page lists 8.3/8.4/8.5 all as "compatible and recommended".
+# WHY PHP 8.5
+#   Two independent reasons, which is why this was not a close call:
 #
-#   But dfc_civicrm's info.xml declares:
-#     <php_compatibility><ver>8.1</ver>8.2 8.3 8.4</php_compatibility>
-#   8.5 is outside that range and CiviCRM enforces the declared range when
-#   registering an extension, so `cv ext:enable` would refuse it. Hard blocker.
+#   1. CiviCRM pairs the versions explicitly. Its requirements page says
+#      "PHP: PHP 8.3, 8.4 or 8.5 is recommended (8.4 runs with CiviCRM
+#      6.12-6.15, 8.5 with 6.16+)". This box runs 6.18.2, so 8.5 is the
+#      matched pair.
 #
-#   To move to 8.5.11: add <ver>8.5</ver> to the extension's info.xml FIRST,
-#   then change this tag. Changing only the tag breaks registration.
+#   2. dfc_civicrm permits it:
+#      <php_compatibility>8.1 8.2 8.3 8.4 8.5</php_compatibility>
+#
+#   HISTORY, because it was the other way round until 2026-10-08: this manifest
+#   pinned 8.4 and cited the extension as the reason, because the reference
+#   info.xml on docs.civicrm.org listed only 8.1-8.4, which made 8.4 act as a
+#   ceiling. The extension lifted it - its own tools/preflight.sh records this -
+#   so the rationale above replaced the old one rather than contradicting it.
+#
+#   CiviCRM enforces the declared php_compatibility range at registration, so
+#   raising phpTag past 8.5 without first adding <ver>8.6</ver> to the
+#   extension's info.xml will break `cv ext:enable`.
 #
 # WHAT THIS MANIFEST DOES *NOT* DO
 #   It does not deploy the extension. The extension has no git remote and its
@@ -45,7 +54,7 @@ description: |
   documented requirements, for testing the dfc_civicrm native extension.
 
   * CiviCRM 6.18.2 Standalone served from the domain root (as required)
-  * PHP 8.4.26, MariaDB 11.8.9
+  * PHP 8.5.11, MariaDB 11.8.9
   * Database tuned: sql_mode without ONLY_FULL_GROUP_BY/ANSI, utf8mb4,
     thread_stack 256k, trusted function creators
   * private/, public/, ext/ on persistent volumes; survive redeploy
@@ -103,14 +112,15 @@ settings:
     - caption: PHP tag
       type: string
       name: phpTag
-      default: "8.4.26"
+      default: "8.5.11"
       hideLabel: false
       description: |
-        DEFAULT IS 8.4 ONLY BECAUSE OF THE EXTENSION. CiviCRM core is happy on
-        8.5 (its docs list 8.3/8.4/8.5 as "compatible and recommended"), but
-        dfc_civicrm's info.xml declares php_compatibility 8.1-8.4 and CiviCRM
-        enforces that range at registration time. Add <ver>8.5</ver> to the
-        extension's info.xml first, then raise this.
+        8.5 is what CiviCRM pairs with releases 6.16+, and dfc_civicrm declares
+        php_compatibility 8.1-8.5. Confirm this exact patch tag exists on your
+        panel before installing - the Cloud Scripting reference lists only PHP
+        7.4/8.0/8.1 as engines and is stale. Raising this above 8.5 needs
+        <ver>8.6</ver> added to the extension's info.xml first, because CiviCRM
+        enforces the declared range at registration.
 
     - caption: MariaDB tag
       type: string
@@ -200,7 +210,7 @@ nodes:
   - nodeType: apache
     nodeGroup: cp
     displayName: CiviCRM
-    engine: php8.4
+    engine: php8.5
     tag: ${settings.phpTag}
     cloudlets: ${settings.cpCloudlets}
     scalingMode: STATELESS

@@ -119,6 +119,29 @@ log "boot file: ${BOOT}"
 printf '%s\n' "$MEMBERS" | grep -qx "${EXT_KEY}/info.xml" \
     || die "archive has no ${EXT_KEY}/info.xml"
 
+# The key and type are ATTRIBUTES on the root element
+# (<extension key="dfc_civicrm" type="module">), not child elements. So a grep
+# for "<key>" matches nothing and, if used as a check, silently passes - which is
+# exactly the sort of thing that turns into "the extension did not register".
+INFO_KEY="$(tar xzOf "$ARCHIVE" "${EXT_KEY}/info.xml" 2>/dev/null \
+    | php -r '$x=@simplexml_load_string(stream_get_contents(STDIN)); echo $x ? (string) $x["key"] : "";' 2>/dev/null || true)"
+[ -n "$INFO_KEY" ] \
+    || die "could not read a key attribute from ${EXT_KEY}/info.xml.
+    CiviCRM reads key and type off the root element:
+      <extension key=\"${EXT_KEY}\" type=\"module\">
+    If yours uses child elements instead, the archive is not shaped like a
+    CiviCRM extension and the scanner will not recognise it."
+[ "$INFO_KEY" = "$EXT_KEY" ] \
+    || die "info.xml declares key=\"${INFO_KEY}\" but the directory is ${EXT_KEY}/.
+    CiviCRM resolves <ext-dir>/<key>/<file>.php, so these MUST agree."
+log "info.xml key  : ${INFO_KEY}"
+
+# type is informational only, but worth seeing: a "module" extension behaves
+# differently from a "normal" one, and a mismatch here is a common surprise.
+INFO_TYPE="$(tar xzOf "$ARCHIVE" "${EXT_KEY}/info.xml" 2>/dev/null \
+    | php -r '$x=@simplexml_load_string(stream_get_contents(STDIN)); echo $x ? (string) $x["type"] : "";' 2>/dev/null || true)"
+log "info.xml type : ${INFO_TYPE:-<unset>}"
+
 # dfc_civicrm reads connector contexts/ and vocabularies/ off disk at runtime.
 # Its own preflight calls this out: losing either breaks export with a "file not
 # found" rather than an obvious missing-vendor error.

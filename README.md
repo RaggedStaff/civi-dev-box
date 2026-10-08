@@ -30,33 +30,36 @@ provides the box, then runs the ones already written.**
 
 | Component  | Version    | Rationale |
 | ---------- | ---------- | --------- |
-| App server | Apache + PHP | `apachephp-dockerized` — see below |
-| PHP        | **8.4.26** | **Not 8.5 — see below** |
+| App server | Apache + PHP | `apache` — see below |
+| PHP        | **8.5.11** | Matches CiviCRM 6.16+; the extension allows it |
 | Database   | **MariaDB 11.8.9** | CiviCRM documents *"11.4+ recommended"*; LTS |
 | CiviCRM    | **6.18.2** | Current Standalone release |
 
-### Why PHP 8.4 and not 8.5
+### Why PHP 8.5
 
-**The only reason is the extension.** `dfc_civicrm`'s `info.xml` declares:
+CiviCRM's requirements page pairs the versions explicitly:
+
+> PHP: PHP 8.3, 8.4 or 8.5 is recommended (**8.4 runs with CiviCRM 6.12–6.15,
+> 8.5 with 6.16+**)
+
+This box runs CiviCRM **6.18.2**, so 8.5 is the matched pair. 8.4 would be
+running a release against a PHP version its own documentation does not pair it
+with.
+
+`dfc_civicrm` permits it too. Its `info.xml` declares:
 
 ```xml
 <php_compatibility>
-  <ver>8.1</ver><ver>8.2</ver><ver>8.3</ver><ver>8.4</ver>
+  <ver>8.1</ver><ver>8.2</ver><ver>8.3</ver><ver>8.4</ver><ver>8.5</ver>
 </php_compatibility>
 ```
 
-8.5 is outside that declared range, and CiviCRM enforces the declared range when
-registering an extension. So `cv ext:enable` would refuse `dfc_civicrm` on
-PHP 8.5. **This is a hard blocker, not a preference.**
-
-CiviCRM *core* is perfectly happy on 8.5 — its requirements page lists 8.3, 8.4
-and 8.5 all as *"compatible and recommended"*, and 8.5 as the recommended
-version for releases 6.16+. Nothing about the platform argues for 8.4; only the
-extension does.
-
-To move the box to 8.5.11, add `<ver>8.5</ver>` to the extension's `info.xml`
-first, then change `phpTag`. Do not only change the tag — registration will
-fail.
+> **Note on history.** Earlier revisions of this repo pinned PHP 8.4 and cited
+> this very element as the reason. That was true when written, and it stopped
+> being true on **2026-10-08**: the reference `info.xml` on docs.civicrm.org
+> listed only 8.1–8.4, which made 8.4 act as a ceiling, and the extension lifted
+> it. Its own `tools/preflight.sh` records this. The rationale here has been
+> corrected to match the current file rather than left standing.
 
 ---
 
@@ -64,7 +67,7 @@ fail.
 
 ```
                     ┌────────────────────────────────────────────┐
-   browser ────────▶│  cp   apachephp-dockerized  (PHP 8.4.26)   │
+   browser ────────▶│  cp   apache                (PHP 8.5.11)   │
   dev.civi.sioldata │                                            │
          .com      │  $HOME/apps/civicrm/          ← ephemeral    │
                     │    civicrm.standalone.php                   │
@@ -88,7 +91,7 @@ would need them reimplemented by hand. CiviCRM's docs present Apache and NGINX
 as equals and recommend neither, so the release's own code decides it. See
 [`ops/README-apache.md`](ops/README-apache.md).
 
-**Why a JPS manifest and not a custom Docker image.** Official `php:8.4-*`
+**Why a JPS manifest and not a custom Docker image.** Official `php:8.5-*`
 images are Debian trixie (13), which is *not* in Jelastic's custom-image
 allowlist (`AlmaLinux 9`, `Alpine 3`, `CentOS 7/8`, `Debian 12`,
 `Ubuntu 18.04–24.04` — **amd64 only**). A custom image would mean building PHP
@@ -145,7 +148,7 @@ curl -sG "${JELASTIC_API}/environment/control/importmanifest" \
   --data-urlencode "manifestUrl=${JPS_URL}" \
   --data-urlencode "envName=civi-dev" \
   --data-urlencode "siteUrl=https://dev.civi.sioldata.com" \
-  --data-urlencode "phpTag=8.4.26" \
+  --data-urlencode "phpTag=8.5.11" \
   --data-urlencode "demoData=false"
 ```
 
@@ -242,7 +245,7 @@ plus `http://localhost` for the version probe. It asserts:
 
 | Symptom | Cause |
 | --- | --- |
-| `cv ext:enable` refuses the extension | `php_compatibility` excludes the running PHP. dfc_civicrm declares 8.1–8.4; the box is 8.4.26. Raising `phpTag` to 8.5 causes exactly this. |
+| `cv ext:enable` refuses the extension | `php_compatibility` excludes the running PHP. dfc_civicrm declares 8.1–8.5; the box is 8.5.11. Raising `phpTag` past 8.5 causes exactly this. |
 | `top-level directory does not match extension key` | The archive's root dir must be `dfc_civicrm/`, because CiviCRM resolves `<ext-dir>/<key>/<file>.php`. |
 | `archive is missing part of the vendored DFC connector subset` | Built with `--no-vendor`. Rebuild with `tools/build-release.sh --force`. |
 | `could not locate a CiviCRM Standalone project root` | `20-fetch-civicrm.sh` has not run, or set `CIVICRM_APP_DIR`. |
@@ -290,6 +293,11 @@ ext-template/               a minimal valid extension, for testing the deploy pa
 - **`.htaccess` permissions.** If the platform's Apache sets a restrictive
   `AllowOverride`, `private/.htaccess` will not take effect. Verify with the two
   `curl` commands in step 4; that is why the check exists.
+- **The CiviCRM download is not checksum-verified.** CiviCRM publishes no
+  `.sha256`/`.md5` sidecar for the Standalone tarball — the sidecar URL redirects
+  to a `NoSuchKey` — so there is nothing to fetch automatically and the default
+  path rests on TLS alone. Set `CIVICRM_SHA256` to an out-of-band value to make
+  it a verified download; the script says so out loud when it is unset.
 - **Cron cannot be created from JPS** on Jelastic.
 - **`intl` is compiled, not enabled, on some images.** CiviCRM requires it
   (*"PHP INTL — required for outputting localized formatted number strings from
@@ -320,11 +328,11 @@ pipe form and hit this too.)
 If you'd rather not publish, skip it: the environment still deploys, and
 `make up` pushes and runs the scripts over SSH instead.
 
-**Why is PHP 8.4 when you earlier said 8.5 was fine?**
-For CiviCRM core, 8.5 is fine and recommended. But this box's actual subject is
-`dfc_civicrm`, whose `info.xml` declares `php_compatibility` up to 8.4 only.
-CiviCRM enforces that declared range, so 8.5 would block the extension from
-installing at all.
+**Why did this used to pin PHP 8.4?**
+Because `dfc_civicrm`'s `php_compatibility` stopped at 8.4, and CiviCRM enforces
+that declared range when registering an extension. The extension lifted the
+ceiling on 2026-10-08, so the box now uses 8.5 — which is also what CiviCRM's
+own documentation pairs with 6.16+. See the note under *Pinned stack*.
 
 ---
 

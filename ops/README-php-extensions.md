@@ -57,7 +57,7 @@ If you keep replacing the node, a custom image is the durable answer. The
 platform supports custom containers from any registry, but the base OS must be
 one of the supported distributions (Debian 12, Ubuntu 18.04–24.04, AlmaLinux 9,
 Alpine 3, CentOS 7–8) and the architecture must be amd64. Official
-`php:8.4-apache` images are on Debian 13, which is **not** in that list — so
+`php:8.5-apache` images are on Debian 13, which is **not** in that list — so
 they need a rebase or a different source image, not just a `FROM` line.
 
 ## Verify

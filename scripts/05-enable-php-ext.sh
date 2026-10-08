@@ -16,20 +16,23 @@
 # Strategy, in order of preference:
 #
 #   1. Already loaded? Then there is nothing to do.
-#   2. intl.so present in PHP's own extension_dir? Enable it in php.ini.
-#      This is the expected path and matches the vendor's documented
-#      procedure (dashboard > Config > etc/php.ini > uncomment
-#      extension=intl.so).
+#   2. intl.so present in PHP's own extension_dir? Enable it - first via a
+#      conf.d drop-in, then by appending to php.ini, because some builds list a
+#      scan dir they do not actually honour.
 #   3. Not on disk but the image is official-php-derived (it has
 #      docker-php-ext-install)? Compile it. Works, but is EPHEMERAL - see the
 #      warning printed when that happens.
-#   4. Otherwise fail loudly with the vendor's manual route.
+#   4. Otherwise fail loudly, and include PHP's OWN diagnostic in the message.
+#      A silent "could not enable it" costs a round-trip; the startup warning
+#      ("Unable to load dynamic library ... undefined symbol") says exactly why
+#      in one.
 #
 # Everything is discovered at runtime. Do not hardcode /usr/lib64/php/modules or
 # /usr/local/etc/php - those are two of several layouts and guessing wrong
 # produces a php.ini edit that silently does nothing.
 #
-# Env: (none required)
+# Env: CIVICRM_EXT_TO_ENABLE  which extension to enable (default: intl)
+#      CIVICRM_EXT_MODULE_PATH explicit path to the .so, if auto-discovery fails
 set -euo pipefail
 # shellcheck source=lib.sh
 _CIVI_SELF="${BASH_SOURCE[0]:-$0}"
@@ -45,7 +48,11 @@ MARKER="# managed by civi-dev-box ($EXT)"
 
 log "=== enable php extension: ${EXT} ==="
 
-have_ext() { php -m 2>/dev/null | tr 'A-Z' 'a-z' | grep -qx "$1"; }
+# Capture stderr as well as stdout: when an extension fails to load, PHP prints
+# a startup warning to stderr and exits 0, so discarding stderr hides the only
+# useful clue there is.
+php_modules() { php -m 2>&1 || true; }
+have_ext()    { php_modules | tr 'A-Z' 'a-z' | grep -qx "$1"; }
 
 if have_ext "$EXT"; then
   log "${EXT} is already loaded - nothing to do"
@@ -56,65 +63,118 @@ command -v php >/dev/null 2>&1 || die "php not found on PATH"
 
 # --- Discover where PHP actually looks ---------------------------------------
 EXT_DIR="$(php -r 'echo (string) ini_get("extension_dir");' 2>/dev/null || true)"
+PHP_API="$(php -r 'echo (string) PHP_VERSION;' 2>/dev/null || true)"
 LOADED_INI="$(php --ini 2>/dev/null | awk -F': *' '/^Loaded Configuration File/{print $2; exit}')"
 SCAN_DIR="$(php --ini 2>/dev/null | awk -F': *' '/^Scan for additional .ini files in/{print $2; exit}')"
 
-log "extension_dir : ${EXT_DIR:-<unset>}"
-log "php.ini       : ${LOADED_INI:-<none>}"
-log "scan dir      : ${SCAN_DIR:-<none>}"
+log "php            : ${PHP_API:-<unknown>}"
+log "extension_dir  : ${EXT_DIR:-<unset>}"
+log "php.ini        : ${LOADED_INI:-<none>}"
+log "scan dir       : ${SCAN_DIR:-<none>}"
 
-SO=""
-for candidate in \
-  "${EXT_DIR}/${EXT}.so" \
-  "${EXT_DIR}/../modules/${EXT}.so" \
-  /usr/lib64/php/modules/"${EXT}.so" \
-  /usr/lib/php/modules/"${EXT}.so"
-do
-  [ -n "$candidate" ] && [ -f "$candidate" ] && { SO="$candidate"; break; }
-done
-
-# --- Where to put the directive ------------------------------------------------
-# Prefer a conf.d drop-in: it is separate from the platform-managed php.ini, so
-# the platform cannot clobber it and we do not have to edit a file it owns.
-TARGET_INI=""
-if [ -n "$SCAN_DIR" ] && [ "$SCAN_DIR" != "(none)" ] && mkdir -p "$SCAN_DIR" 2>/dev/null \
-   && [ -w "$SCAN_DIR" ]; then
-  TARGET_INI="${SCAN_DIR}/civi-${EXT}.ini"
-  USING_SCAN_DIR=1
-elif [ -n "$LOADED_INI" ] && [ "$LOADED_INI" != "(none)" ] && [ -w "$LOADED_INI" ]; then
-  TARGET_INI="$LOADED_INI"
-  USING_SCAN_DIR=0
-else
-  USING_SCAN_DIR=0
+SO="${CIVICRM_EXT_MODULE_PATH:-}"
+if [ -z "$SO" ]; then
+  for candidate in \
+    "${EXT_DIR}/${EXT}.so" \
+    "${EXT_DIR}/../modules/${EXT}.so" \
+    /usr/lib64/php/modules/"${EXT}.so" \
+    /usr/lib/php/modules/"${EXT}.so"
+  do
+    [ -n "$candidate" ] && [ -f "$candidate" ] && { SO="$candidate"; break; }
+  done
 fi
 
-enable_via_ini() {
-  [ -n "$TARGET_INI" ] || return 1
-
-  if [ "${USING_SCAN_DIR}" = "1" ]; then
-    {
-      echo "$MARKER"
-      echo "extension=${EXT}.so"
-    } > "$TARGET_INI"
+# --- Write the directive, and remove it again if PHP refuses -----------------
+# Absolute path in the directive, so extension_dir resolution stops being a
+# variable we have to get right.
+write_directive() { # $1 = target ini, $2 = 1 for a conf.d drop-in
+  local target="$1" dropin="$2"
+  if [ "$dropin" = "1" ]; then
+    mkdir -p "$(dirname "$target")" 2>/dev/null || return 1
+    { echo "$MARKER"; echo "extension=${SO}"; } > "$target" || return 1
   else
-    # Idempotent: strip any previous block, then append a fresh one.
-    sed -i "\|^${MARKER}\$|d;\|^extension=${EXT}\.so\$|d" "$TARGET_INI" 2>/dev/null || true
-    {
-      echo ""
-      echo "$MARKER"
-      echo "extension=${EXT}.so"
-    } >> "$TARGET_INI"
+    sed -i "\|^${MARKER}\$|d;\|^extension=${SO}\$|d" "$target" 2>/dev/null || true
+    { echo ""; echo "$MARKER"; echo "extension=${SO}"; } >> "$target" || return 1
   fi
-  log "wrote extension=${EXT}.so to ${TARGET_INI}"
   return 0
+}
+
+remove_directive() { # $1 = target ini, $2 = 1 for a conf.d drop-in
+  local target="$1" dropin="$2"
+  [ -f "$target" ] || return 0
+  if [ "$dropin" = "1" ]; then
+    rm -f "$target"
+  else
+    sed -i "\|^${MARKER}\$|d;\|^extension=${SO}\$|d" "$target" 2>/dev/null || true
+  fi
+}
+
+DIAG=""
+ATTEMPTED=""
+
+# Try each candidate location in turn. `have_ext` re-reads php.ini because the
+# CLI re-parses it on every invocation, so this is a real check and not a guess.
+try_location() { # $1 = label, $2 = target ini, $3 = 1 for a conf.d drop-in
+  local label="$1" target="$2" dropin="$3"
+  ATTEMPTED="${ATTEMPTED}\n    - ${label}: ${target}"
+
+  write_directive "$target" "$dropin" \
+    || { warn "cannot write ${target} - skipping"; return 1; }
+  log "tried ${label}: extension=${SO} in ${target}"
+
+  if have_ext "$EXT"; then
+    log "${EXT} is now loaded (via ${label})"
+    ENABLED_VIA="$target"
+    return 0
+  fi
+
+  DIAG="$(php_modules | grep -iE 'unable to load|warning|deprecated: |error' || true)"
+  warn "${label} did not take effect; reverting ${target}"
+  remove_directive "$target" "$dropin"
+  return 1
 }
 
 if [ -n "$SO" ]; then
   log "found ${SO}"
-  if ! enable_via_ini; then
-    die "found ${SO} but no writable php.ini or conf.d directory to enable it in.
-    Enable it by hand: dashboard > node > Config > etc > php.ini, uncomment
-    'extension=${EXT}.so', save, restart the node."
+  [ -n "$EXT_DIR" ] && log "  (extension_dir is ${EXT_DIR})"
+
+  # conf.d first: it is separate from the platform-managed php.ini, so the
+  # platform cannot clobber it and we do not edit a file we do not own.
+  if [ -n "$SCAN_DIR" ] && [ "$SCAN_DIR" != "(none)" ]; then
+    try_location "conf.d drop-in" "${SCAN_DIR}/civi-${EXT}.ini" 1 || true
+  fi
+  if [ -z "${ENABLED_VIA:-}" ] && [ -n "$LOADED_INI" ] && [ "$LOADED_INI" != "(none)" ]; then
+    try_location "php.ini" "$LOADED_INI" 0 || true
+  fi
+
+  if [ -z "${ENABLED_VIA:-}" ]; then
+    {
+      echo "PHP would not load ${SO}, though the file exists."
+      echo
+      echo "PHP's own diagnostic:"
+      if [ -n "$DIAG" ]; then
+        printf '  %s\n' "$DIAG"
+      else
+        echo "  (none - PHP printed no warning)"
+      fi
+      echo
+      echo "Context:"
+      echo "  php            : ${PHP_API}"
+      echo "  extension_dir  : ${EXT_DIR}"
+      echo "  php api version: $(php -r 'echo (int) PHP_MAJOR_VERSION * 1000000 + (int) PHP_MINOR_VERSION * 1000 + (int) PHP_RELEASE_VERSION;' 2>/dev/null || echo unknown)"
+      if command -v ldd >/dev/null 2>&1; then
+        echo "  missing libs   : $(ldd "$SO" 2>/dev/null | grep 'not found' | awk '{print $1}' | paste -sd, - || true)"
+      fi
+      echo
+      echo "Locations tried:"
+      printf "%b\n" "$ATTEMPTED"
+      echo
+      echo "Most likely cause: the .so was built for a different PHP API version than"
+      echo "the running one, or a shared library it needs is absent. Check whether"
+      echo "the platform's modules folder carries per-version subdirectories, and"
+      echo "point at the right one with CIVICRM_EXT_MODULE_PATH."
+    } | sed 's/^/  /' >&2
+    die "could not enable ${EXT}; PHP's diagnostic is above."
   fi
 elif command -v docker-php-ext-install >/dev/null 2>&1; then
   # Official-php-derived image. Compiling works but lives in the container
@@ -135,8 +195,8 @@ elif command -v docker-php-ext-install >/dev/null 2>&1; then
     Build ${EXT}.so elsewhere and upload it to PHP's extension_dir, then enable it
     (dashboard > node > Config > etc > php.ini), or use a custom image."
   fi
-  # docker-php-ext-install drops the .so and docker-php-ext-enable writes the ini.
   command -v docker-php-ext-enable >/dev/null 2>&1 && docker-php-ext-enable "$EXT" || true
+  have_ext "$EXT" || die "${EXT} still not loaded after docker-php-ext-install."
 else
   die "${EXT}.so is not on disk and this image has no docker-php-ext-install,
     so it cannot be enabled or built automatically.
@@ -144,26 +204,6 @@ else
     PHP's extension_dir and enable it in php.ini
     (dashboard > node > Config > etc > php.ini)."
 fi
-
-# --- Verify, and roll back a directive that PHP refuses ----------------------
-if ! have_ext "$EXT"; then
-  if [ -n "$TARGET_INI" ] && [ -w "$TARGET_INI" ]; then
-    warn "PHP still does not list ${EXT} after enabling it; reverting the ini change."
-    if [ "${USING_SCAN_DIR}" = "1" ]; then
-      # The drop-in is ours, so remove it rather than leave an empty file that
-      # PHP would still read on every request.
-      rm -f "$TARGET_INI"
-      log "removed ${TARGET_INI}"
-    else
-      sed -i "\|^${MARKER}\$|d;\|^extension=${EXT}\.so\$|d" "$TARGET_INI" 2>/dev/null || true
-    fi
-  fi
-  die "could not enable ${EXT}. PHP may have been built without it, or the .so
-    will not load (missing shared library). Check the PHP error log, or set
-    CIVICRM_EXT_TO_ENABLE to something this build supports."
-fi
-
-log "${EXT} is now loaded"
 
 # The CLI reads php.ini fresh on every invocation, so the check above is real.
 # The web SAPI caches it at startup, so a running Apache/PHP still needs a nudge.

@@ -42,6 +42,15 @@ else
     log "verifying sha256"
     echo "${CIVICRM_SHA256}  ${TMP}/${TARBALL}" | sha256sum -c - \
       || die "checksum mismatch for ${TARBALL}"
+  else
+    # Say so. Upstream publishes no .sha256/.md5 sidecar for the Standalone
+    # tarball (verified: the sidecar URL redirects to a GCS NoSuchKey), so this
+    # download rests on TLS alone. Pin CIVICRM_SHA256 to an out-of-band value if
+    # that matters for your threat model.
+    warn "no CIVICRM_SHA256 set - the download is NOT checksum-verified.
+    CiviCRM publishes no checksum sidecar for the Standalone tarball, so there
+    is nothing to fetch automatically; supply the expected hash yourself to turn
+    this into a verified download."
   fi
 
   log "extracting"
