@@ -130,9 +130,9 @@ for d in src contexts vocabularies; do
 done
 [ "$HAVE" -eq 3 ] \
     || die "archive is missing part of the vendored DFC connector subset (${HAVE}/3 dirs present).
-    dfc_civicrm needs it at runtime for export. Rebuild without --no-vendor:
-      cd $(basename "$EXT_DIR")/../src/$EXT_KEY 2>/dev/null || true
-      tools/build-release.sh --force"
+    dfc_civicrm needs it at runtime for export. Rebuild on your workstation
+    WITHOUT --no-vendor:
+      cd <dfc_civicrm checkout> && tools/build-release.sh --force"
 log "vendored connector subset: OK (src, contexts, vocabularies)"
 
 # --- Install ---------------------------------------------------------------
