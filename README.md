@@ -261,6 +261,7 @@ plus `http://localhost` for the version probe. It asserts:
 jps/civi-standalone.jps     the install image — import this
 scripts/
   lib.sh                    shared helpers, path/DB discovery
+  05-enable-php-ext.sh      enable intl, which CiviCRM requires and the image ships disabled
   00-preflight.sh           fail fast on an unsatisfying runtime
   10-db-tune.sh             CiviCRM's documented DB requirements  [runs on sqldb]
   20-fetch-civicrm.sh       release code + bind volumes + .user.ini
@@ -290,6 +291,14 @@ ext-template/               a minimal valid extension, for testing the deploy pa
   `AllowOverride`, `private/.htaccess` will not take effect. Verify with the two
   `curl` commands in step 4; that is why the check exists.
 - **Cron cannot be created from JPS** on Jelastic.
+- **`intl` is compiled, not enabled, on some images.** CiviCRM requires it
+  (*"PHP INTL — required for outputting localized formatted number strings from
+  CiviCRM 5.28 onwards"*), and the platform ships it either as a `.so` waiting to
+  be enabled or not at all. `05-enable-php-ext.sh` handles the first case
+  automatically. If the binary is genuinely absent and the image has no
+  `docker-php-ext-install`, the script stops and tells you; the platform's own
+  remedy is to upload a compiled `intl.so` via **node → Config → etc →
+  php.ini**. See [`ops/README-php-extensions.md`](ops/README-php-extensions.md).
 - **`type="module"` in the extension's `info.xml`.** Its own comment says
   *"Since CiviCRM 6.26 every extension must be type=module"*, but 6.26 is a
   **future** release (CiviCRM versions are year-based; 6.26 ≈ 2027). On 6.18.2
@@ -304,8 +313,10 @@ ext-template/               a minimal valid extension, for testing the deploy pa
 **Why do the scripts need to be published to a URL?**
 The JPS manifest can only run scripts with `cmd`, which executes shell commands
 *inside* the container — but it has no way to transfer a file there. So the
-manifest does `curl -fsS <url> | bash -s`. Jelastic's own app packages work the
-same way (a manifest in a GitHub repo pulls its scripts from `raw.githubusercontent`).
+manifest curls each script into `$HOME/.civi-scripts` and then runs it as a
+file. (It must be a *file*: piping into `bash -s` leaves `BASH_SOURCE` unset,
+which breaks every `source lib.sh` line. Jelastic's own app packages use the
+pipe form and hit this too.)
 If you'd rather not publish, skip it: the environment still deploys, and
 `make up` pushes and runs the scripts over SSH instead.
 
