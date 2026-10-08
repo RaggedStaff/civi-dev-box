@@ -34,7 +34,7 @@
 #   It does not deploy the extension. The extension has no git remote and its
 #   vendor/ + composer.lock are gitignored, so there is nothing to fetch here.
 #   It is deployed afterwards as a built archive - see README and
-#   `make ext-deploy` / `make ext-verify`. The onInstall step below still
+#   `make ext-install` / `make ext-verify`. The onInstall step below still
 #   supports a source URL for completeness, but expect to leave it blank.
 # =============================================================================
 type: install
@@ -178,7 +178,7 @@ settings:
       description: |
         Only for a remote-pushed copy of the extension. dfc_civicrm has no git
         remote and its vendor/ is gitignored, so prefer the archive workflow:
-        `make ext-deploy`. Blank = deploy the site only.
+        `make ext-install`. Blank = deploy the site only.
 
 # -----------------------------------------------------------------------------
 # Topology
@@ -340,7 +340,7 @@ success: |
   remote and its `vendor/` is gitignored. From your workstation:
 
       make ext-build      # runs the extension's own tools/build-release.sh
-      make ext-deploy     # uploads the archive and runs cv ext:enable
+      make ext-install    # uploads the archive and runs cv ext:enable
       make ext-verify     # runs the extension's own tools/verify-install.sh
 
   #### 3. Add cron (one-time, not scriptable from JPS)

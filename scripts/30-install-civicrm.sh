@@ -36,6 +36,13 @@ if civicrm_installed; then
 fi
 
 # --- Settings --------------------------------------------------------------
+# Default these the same way 10-db-tune.sh does. It creates the user with
+# CIVICRM_DB_USER defaulted to 'civicrm', so defaulting here too keeps the two
+# scripts in agreement; without it, running this script without the node env set
+# dies on `set -u` with "CIVICRM_DB_USER: unbound variable".
+: "${CIVICRM_DB_NAME:=civicrm}"
+: "${CIVICRM_DB_USER:=civicrm}"
+
 DB_HOST="$(resolve_db_host)"
 [ -n "$DB_HOST" ] || die "cannot resolve database host (set CIVICRM_DB_HOST)"
 [ -n "$CIVICRM_DB_PASS" ] || die "CIVICRM_DB_PASS must be provided"

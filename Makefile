@@ -163,6 +163,17 @@ validate: ## Sanity-check the manifest locally
 	             print('  fields  :', len(d['settings']['fields'])); \
 	             print('  events  :', [k for k in d if k.startswith('on')])"
 
+.PHONY: check-docs
+check-docs: ## Every `make <target>` mentioned in the docs must actually exist
+	@targets=$$(grep -hoE '^[a-z][a-zA-Z0-9_-]*:' Makefile | tr -d ':' | sort -u); \
+	refs=$$(grep -rhoE 'make [a-z][a-zA-Z0-9_-]*' README.md jps/*.jps ops/*.md 2>/dev/null \
+	        | awk '{print $$2}' | sort -u); \
+	bad=0; \
+	for r in $$refs; do \
+	  echo "$$targets" | grep -qx "$$r" || { echo "  phantom target: make $$r"; bad=1; }; \
+	done; \
+	[ $$bad -eq 0 ] && echo "  all $$(echo "$$refs" | wc -w) documented make targets exist" || exit 1
+
 .PHONY: shellcheck
 shellcheck: ## Lint the shell scripts
 	@command -v shellcheck >/dev/null || { echo "shellcheck not installed"; exit 0; }

@@ -31,9 +31,20 @@ done
 echo "[layout]"
 if APP_ROOT="$(detect_app_root 2>/dev/null)"; then
   ok "project root ${APP_ROOT}"
-  [ -f "${APP_ROOT}/civicrm.standalone.php" ] && ok "boot file present" || bad "civicrm.standalone.php missing"
+  # Plain if/else, not `A && ok ... || bad ...`: ok() returns printf's status,
+  # so if stdout is a closed pipe (e.g. `make health | head`) printf fails and a
+  # healthy check gets counted as a failure.
+  if [ -f "${APP_ROOT}/civicrm.standalone.php" ]; then
+    ok "boot file present"
+  else
+    bad "civicrm.standalone.php missing"
+  fi
   for d in core public private ext; do
-    [ -e "${APP_ROOT}/${d}" ] && ok "${d}/ present" || bad "${d}/ missing"
+    if [ -e "${APP_ROOT}/${d}" ]; then
+      ok "${d}/ present"
+    else
+      bad "${d}/ missing"
+    fi
   done
   # Writable trees must resolve onto the persistent volume, not the ephemeral tree.
   for d in private public ext; do

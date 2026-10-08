@@ -34,7 +34,10 @@ die()  { printf '[civi][FATAL] %s\n' "$*" >&2; exit 1; }
 CIVICRM_PHP_MIN="8.2"
 CIVICRM_REQUIRED_EXTENSIONS="bcmath curl dom mbstring zip intl fileinfo pdo_mysql"
 
-DOWNLOAD_BASE="https://download.civicrm.org"
+# :- form so a mirror set in the environment actually takes effect. A bare
+# assignment here silently overwrote any override, contradicting the
+# "override via environment" contract this section is under.
+DOWNLOAD_BASE="${DOWNLOAD_BASE:-https://download.civicrm.org}"
 CV_URL="${CV_URL:-https://download.civicrm.org/cv/cv.phar}"
 
 # ---------------------------------------------------------------------------
