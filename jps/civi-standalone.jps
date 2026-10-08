@@ -179,18 +179,19 @@ settings:
 # Topology
 # -----------------------------------------------------------------------------
 nodes:
-  # apachephp-dockerized (Apache + PHP), NOT nginxphp.
+  # Apache + PHP, not NGINX.
   #
-  # CiviCRM's Standalone release ships .htaccess files - that is the mechanism it
-  # uses to keep private/ unreadable from the web and to route /civicrm/* through
-  # its front controller. NGINX ignores .htaccess, so on NGINX those rules must
-  # be reimplemented in a vhost by hand. Apache honours them as shipped.
+  # CiviCRM's Standalone release ships .htaccess files - that is how it keeps
+  # private/ unreadable (private/ holds civicrm.settings.php, i.e. the DB
+  # credentials) and routes /civicrm/* through its front controller. Apache
+  # honours those rules as shipped; NGINX ignores .htaccess and would need them
+  # reimplemented by hand in a vhost.
   #
-  # (dfc_civicrm itself registers its routes through xml/Menu/dfc_civicrm.xml,
-  # so it needs no rewriting - but CiviCRM core still does, and Apache gets that
-  # for free.)
+  # dfc_civicrm registers its own routes via xml/Menu/dfc_civicrm.xml, so it
+  # needs no rewriting of its own - but CiviCRM core still does.
+  #
   # nodeType `apache` is the documented Cloud Scripting identifier for the
-  # Apache+PHP template (alias: apache2). There is no "apachephp-dockerized".
+  # Apache+PHP template (alias `apache2`). There is no "apachephp-dockerized".
   - nodeType: apache
     nodeGroup: cp
     displayName: CiviCRM
@@ -308,7 +309,7 @@ success: |
 
   Dashboard > CUSTOMER > Cron Jobs, using `ops/crontab`.
 
-  #### 3. App server
+  #### 4. App server
 
   Apache is used deliberately: the CiviCRM release protects `private/` with
   `.htaccess`, which only Apache honours. Nothing further to configure.
