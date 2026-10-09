@@ -285,7 +285,7 @@ onInstall:
   # curl || wget because the mariadb-dockerized image may not ship curl. The
   # trailing `|| exit 1` matters: a silent fetch failure would otherwise leave a
   # zero-byte script and fail later with a much more confusing message.
-  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 05-enable-php-ext.sh 00-preflight.sh 20-fetch-civicrm.sh 30-install-civicrm.sh 40-install-extension.sh 90-healthcheck.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
+  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 05-enable-php-ext.sh 06-disable-default-auth.sh 00-preflight.sh 20-fetch-civicrm.sh 30-install-civicrm.sh 40-install-extension.sh 90-healthcheck.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
 
   - cmd [sqldb]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 10-db-tune.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
 
@@ -306,21 +306,27 @@ onInstall:
   # and hid the actual failure. A non-zero exit already aborts the install.
   - cmd [cp]: bash "$HOME/.civi-scripts/00-preflight.sh"
 
-  # --- 3. Database: tuning + schema/user --------------------------------
+  # --- 3. Remove the provider's default HTTP Basic Auth -----------------
+  # The Apache PHP template ships with basic auth enabled so a fresh container
+  # is not left serving to the world. Until it is removed, every request to the
+  # site returns 401 and the browser prompts for credentials.
+  - cmd [cp]: bash "$HOME/.civi-scripts/06-disable-default-auth.sh"
+
+  # --- 4. Database: tuning + schema/user --------------------------------
   # No arguments: 10-db-tune.sh reads CIVICRM_DB_NAME / _USER / _PASS from the
   # environment (see the sqldb node's env block). It was previously handed the
   # password as '$1', which the script never read - so it would have died on an
   # empty password even with the sourcing fixed.
   - cmd [sqldb]: bash "$HOME/.civi-scripts/10-db-tune.sh"
 
-  # --- 4. Release code into the document root + bind volumes ------------
+  # --- 5. Release code into the document root + bind volumes ------------
   # CIVICRM_VERSION and CIVICRM_SITE_URL come from the cp node's env block.
   - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
 
-  # --- 5. Non-interactive install ----------------------------------------
+  # --- 6. Non-interactive install ----------------------------------------
   - cmd [cp]: bash "$HOME/.civi-scripts/30-install-civicrm.sh"
 
-  # --- 6. Optional source-based extension deploy ------------------------
+  # --- 7. Optional source-based extension deploy ------------------------
   # Skipped unless extSource is set. The dfc_civicrm archive workflow
   # (make ext-install) is the normal path.
   - if:
@@ -335,10 +341,13 @@ onInstall:
 # every time the PHP container restarts. Data volumes are untouched, so this is
 # cheap and idempotent.
 onAfterRestartNode [cp]:
-  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 05-enable-php-ext.sh 20-fetch-civicrm.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
+  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 05-enable-php-ext.sh 06-disable-default-auth.sh 20-fetch-civicrm.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
   # Re-enable intl before anything else: if it had to be compiled, it lives in
   # the container filesystem and is gone after a node replacement.
   - cmd [cp]: bash "$HOME/.civi-scripts/05-enable-php-ext.sh"
+  # Same for the Apache config - it lives in the container filesystem too, so a
+  # node replacement restores the 401 prompt.
+  - cmd [cp]: bash "$HOME/.civi-scripts/06-disable-default-auth.sh"
   - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
 
 startPage: ${settings.siteUrl}/civicrm/login

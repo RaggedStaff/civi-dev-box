@@ -245,6 +245,7 @@ plus `http://localhost` for the version probe. It asserts:
 
 | Symptom | Cause |
 | --- | --- |
+| Every page asks for a username/password | The provider's Apache template ships with HTTP Basic Auth enabled so a fresh container isn't serving to the world. `06-disable-default-auth.sh` removes it. If it persists, the auth lives outside the places that script looks: `grep -rniE 'AuthType\|Require valid-user' /etc/httpd /etc/apache2`. |
 | `cv ext:enable` refuses the extension | `php_compatibility` excludes the running PHP. dfc_civicrm declares 8.1–8.5; the box is 8.5.11. Raising `phpTag` past 8.5 causes exactly this. |
 | `top-level directory does not match extension key` | The archive's root dir must be `dfc_civicrm/`, because CiviCRM resolves `<ext-dir>/<key>/<file>.php`. |
 | `archive is missing part of the vendored DFC connector subset` | Built with `--no-vendor`. Rebuild with `tools/build-release.sh --force`. |
@@ -265,6 +266,7 @@ jps/civi-standalone.jps     the install image — import this
 scripts/
   lib.sh                    shared helpers, path/DB discovery
   05-enable-php-ext.sh      enable intl, which CiviCRM requires and the image ships disabled
+  06-disable-default-auth.sh  remove the provider's default HTTP Basic Auth prompt
   00-preflight.sh           fail fast on an unsatisfying runtime
   10-db-tune.sh             CiviCRM's documented DB requirements  [runs on sqldb]
   20-fetch-civicrm.sh       release code + bind volumes + .user.ini
