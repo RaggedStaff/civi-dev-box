@@ -24,12 +24,34 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # --- Resolve the app root ---------------------------------------------------
-# The release must be extracted *into* a directory that will become the
-# webserver document root, because CiviCRM Standalone explicitly does not
-# support installation into a URL subdirectory.
-APP_ROOT="${CIVICRM_APP_DIR:-${HOME}/apps/civicrm}"
+# The release must be extracted *into* the webserver document root, because
+# CiviCRM Standalone explicitly does not support installation into a URL
+# subdirectory. Ask Apache where that is rather than assuming - this platform
+# serves /var/www/html, not $HOME/apps/civicrm, and extracting to the wrong
+# place gives a 500 with the app present but unserved.
+DOC_ROOT="$(detect_document_root || true)"
+[ -n "$DOC_ROOT" ] \
+  || die "could not determine the Apache DocumentRoot.
+    CiviCRM Standalone must be installed at the document root. Check it with:
+      httpd -S | grep -i document_root
+    and set CIVICRM_APP_DIR explicitly."
+log "document root: ${DOC_ROOT}"
+
+APP_ROOT="${CIVICRM_APP_DIR:-$DOC_ROOT}"
 mkdir -p "$APP_ROOT"
 CIVICRM_APP_DIR="$APP_ROOT"
+log "app root: ${APP_ROOT}"
+
+if [ "$APP_ROOT" != "$DOC_ROOT" ] && [ -z "${CIVICRM_APP_DIR_OVERRIDE:-}" ]; then
+  warn "app root ${APP_ROOT} is NOT the document root ${DOC_ROOT}."
+  warn "CiviCRM Standalone will not be served correctly from a subdirectory."
+fi
+
+# Record the choice on the persistent volume, so a later run - including after a
+# node replacement, when the document root may be probed differently - finds the
+# app where it was actually put instead of guessing again.
+mkdir -p "$CIVICRM_DATA_DIR"
+printf '%s' "$APP_ROOT" > "${CIVICRM_DATA_DIR}/.app-dir"
 
 if [ -f "${APP_ROOT}/civicrm.standalone.php" ]; then
   log "release code already present in ${APP_ROOT} - skipping download"

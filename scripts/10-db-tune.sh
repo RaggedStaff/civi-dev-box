@@ -56,11 +56,91 @@ log "wrote ${CONF}"
 # needing privileged access to set GLOBAL.
 if command -v mariadb >/dev/null 2>&1; then MYSQL_CLI=mariadb; else MYSQL_CLI=mysql; fi
 
-root_sql() {
-  "$MYSQL_CLI" -u root ${CIVICRM_MYSQL_ROOT_PASSWORD:+-p"$CIVICRM_MYSQL_ROOT_PASSWORD"} "$@"
+# --- Find a working root/admin connection -----------------------------------
+# The platform's database node sets its own root password, so a bare
+# `mysql -u root` fails with:
+#
+#     ERROR 1045 (28000): Access denied for user 'root'@'localhost' (using password: NO)
+#
+# Rather than assume one mechanism, try the documented ones in order and report
+# which one worked. Guessing here is what produced that error in the first
+# place - the script assumed an unauthenticated root login that this node does
+# not offer.
+#
+# Order matters: an explicit password wins, then credentials the platform
+# already wrote to disk, then passwordless socket auth (the default on a stock
+# MariaDB package and on Jelastic's own admin tooling).
+MYSQL_ROOT_ARGS=()
+
+try_root() { # returns 0 if this invocation works
+  "$MYSQL_CLI" "${MYSQL_ROOT_ARGS[@]}" -e 'SELECT 1;' >/dev/null 2>&1
 }
 
-root_sql -e "SET GLOBAL sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';"
+discover_root() {
+  # 1. An explicitly supplied password.
+  if [ -n "${CIVICRM_MYSQL_ROOT_PASSWORD:-}" ]; then
+    MYSQL_ROOT_ARGS=(-u root "-p${CIVICRM_MYSQL_ROOT_PASSWORD}")
+    if try_root; then
+      log "root access: CIVICRM_MYSQL_ROOT_PASSWORD"
+      return 0
+    fi
+    warn "CIVICRM_MYSQL_ROOT_PASSWORD was set but rejected."
+    MYSQL_ROOT_ARGS=()
+  fi
+
+  # 2. The platform's own admin account. Jelastic ships a config for phpMyAdmin
+  # and admin-panel access to the database; reuse it rather than reinvent it.
+  local cnf
+  for cnf in /root/.my.cnf /var/lib/jelastic/mysql/my.cnf \
+             /etc/mysql/debian.cnf /etc/my.cnf.d/debian.cnf \
+             /etc/jelastic/my.cnf; do
+    [ -r "$cnf" ] || continue
+    MYSQL_ROOT_ARGS=("--defaults-file=${cnf}")
+    if try_root; then
+      log "root access: ${cnf}"
+      return 0
+    fi
+    MYSQL_ROOT_ARGS=()
+  done
+
+  # 3. Passwordless, via the unix socket. Works on a stock MariaDB where root
+  #    authenticates as the OS user (auth_socket / unix_socket).
+  MYSQL_ROOT_ARGS=(-u root)
+  if try_root; then
+    log "root access: passwordless via socket"
+    return 0
+  fi
+
+  # 4. Explicitly say to use the socket: -u root alone may still be trying TCP.
+  MYSQL_ROOT_ARGS=(-u root --protocol=socket)
+  if try_root; then
+    log "root access: passwordless via socket (--protocol=socket)"
+    return 0
+  fi
+
+  MYSQL_ROOT_ARGS=()
+  return 1
+}
+
+if ! discover_root; then
+  die "cannot authenticate to MariaDB as an administrator.
+    Tried, in order:
+      - CIVICRM_MYSQL_ROOT_PASSWORD (not set)
+      - /root/.my.cnf and the platform's my.cnf locations (none readable, or rejected)
+      - passwordless 'mysql -u root' via socket
+
+    The platform sets its own database root password. Find it in the dashboard
+    (Database node > Credentials) and either set CIVICRM_MYSQL_ROOT_PASSWORD on
+    the sqldb node, or run this script by hand:
+      CIVICRM_MYSQL_ROOT_PASSWORD='<password>' ./10-db-tune.sh"
+fi
+
+root_sql() {
+  "$MYSQL_CLI" "${MYSQL_ROOT_ARGS[@]}" "$@"
+}
+
+root_sql -e "SET GLOBAL sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';" \
+  || die "could not set sql_mode as an administrator"
 
 # --- Application database + user ------------------------------------------
 # Credentials are supplied (not generated) by the manifest so that the PHP

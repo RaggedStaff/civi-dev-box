@@ -60,14 +60,93 @@ ensure_data_dirs() {
   mkdir -p "$(data_private)" "$(data_public)" "$(data_ext)"
 }
 
+# --- Document root ----------------------------------------------------------
+# CiviCRM Standalone REQUIRES the project root to BE the webserver document
+# root - it explicitly does not work in a URL subdirectory. So the app root and
+# the DocumentRoot have to be the same directory, and neither can be guessed:
+# this platform serves /var/www/html, not $HOME/apps/civicrm, so extracting to
+# $HOME/apps/civicrm produces a 500 with the app present but unserved.
+#
+# Ask Apache. `httpd -S` prints the parsed virtual hosts including the resolved
+# DocumentRoot, which is authoritative and accounts for Include files and
+# platform-generated config - all of which a hardcoded path cannot.
+detect_document_root() {
+  # Declare before use: every script runs under `set -u`, so referencing an
+  # optional override before defaulting it aborts the script.
+  local droot="${CIVICRM_DOCUMENT_ROOT:-}"
+  if [ -n "$droot" ]; then
+    printf '%s' "$droot"
+    return 0
+  fi
+
+  local bin root found=""
+  for bin in httpd apache2; do
+    command -v "$bin" >/dev/null 2>&1 || continue
+
+    # `httpd -S` prints:  document root "/path"
+    #
+    # Three things to get right, each of which fails SILENTLY by yielding "":
+    #   * it is "document root" with a SPACE. The DocumentRoot *directive* is
+    #     spelled with an underscore, and matching that finds nothing.
+    #   * the value must be taken from AFTER the label, quoted-aware. $NF breaks
+    #     on a path containing spaces ("/opt/my site/html" -> "site/html\""), and
+    #     a plain $3 would include the opening quote.
+    #   * tr -d ' "' deletes spaces too, welding the label onto the path
+    #     ("document root /x" -> "documentroot/x"). Strip quotes only.
+    root="$("$bin" -S 2>/dev/null \
+      | sed -n 's/^[[:space:]]*document[[:space:]][[:space:]]*root[[:space:]]\{1,\}\(.*\)$/\1/p' \
+      | head -1 | tr -d '"\047' | sed 's/[[:space:]]*$//')"
+    if [ -n "$root" ] && [ -d "$root" ]; then
+      # Keep the FIRST hit. Assigning back to `root` here would let a later
+      # iteration that finds nothing reset it to empty and lose a good answer.
+      found="$root"
+    fi
+  done
+  [ -n "$found" ] && { printf '%s' "$found"; return 0; }
+
+  # Apache absent or unhelpful: fall back to the conventional locations. Logged
+  # by the caller so a guess is never silent.
+  for root in /var/www/html /var/www/vhosts /var/www/domain/public_html; do
+    [ -d "$root" ] && { printf '%s' "$root"; return 0; }
+  done
+  return 1
+}
+
+# Resolve the app root for a fresh install: the document root, because that is
+# what CiviCRM needs and what the domain already points at.
+resolve_target_app_dir() {
+  if [ -n "$CIVICRM_APP_DIR" ]; then
+    printf '%s' "$CIVICRM_APP_DIR"
+    return 0
+  fi
+  detect_document_root
+}
+
 # Detect the CiviCRM Standalone project root by looking for the boot file.
-# CiviCRM Standalone REQUIRES the project root to be the webserver document
-# root, so this directory is what the domain must point at.
+# Used AFTER installation, when the release code is already on disk.
 detect_app_root() {
   if [ -n "$CIVICRM_APP_DIR" ]; then
     [ -f "$CIVICRM_APP_DIR/civicrm.standalone.php" ] \
       || die "CIVICRM_APP_DIR=$CIVICRM_APP_DIR does not contain civicrm.standalone.php"
     printf '%s' "$CIVICRM_APP_DIR"
+    return 0
+  fi
+
+  # Already installed: prefer the document root, since that is where it must be
+  # and where it will have been put.
+  if [ -f "${CIVICRM_DATA_DIR}/.app-dir" ]; then
+    CIVICRM_APP_DIR="$(cat "${CIVICRM_DATA_DIR}/.app-dir")"
+    if [ -f "$CIVICRM_APP_DIR/civicrm.standalone.php" ]; then
+      printf '%s' "$CIVICRM_APP_DIR"
+      return 0
+    fi
+  fi
+
+  local droot
+  droot="$(detect_document_root || true)"
+  if [ -n "$droot" ] && [ -f "${droot}/civicrm.standalone.php" ]; then
+    CIVICRM_APP_DIR="$droot"
+    printf '%s' "$droot"
     return 0
   fi
 

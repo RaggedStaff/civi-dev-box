@@ -165,6 +165,21 @@ settings:
         Supplied rather than generated so the database node and the PHP node use
         the same credentials without cross-node plumbing.
 
+    - caption: MariaDB root password (usually leave blank)
+      type: password
+      name: dbRootPass
+      default: ""
+      hideLabel: false
+      description: |
+        The platform generates its own MariaDB root password. Leave this BLANK
+        and 10-db-tune.sh will discover it on its own - from /root/.my.cnf, the
+        platform's my.cnf locations, or passwordless socket auth - which works on
+        most nodes.
+
+        Only fill this in if the install stops with "cannot authenticate to
+        MariaDB as an administrator". The value is on the database node under
+        Credentials in the dashboard.
+
     - caption: Persistent data directory
       type: string
       name: dataDir
@@ -251,10 +266,17 @@ nodes:
     # 10-db-tune.sh creates the schema and user from these. Without them it
     # would die with "CIVICRM_DB_PASS must be provided" - it reads the
     # environment, never positional arguments.
+    #
+    # CIVICRM_DB_ROOT_PASS is OPTIONAL and empty by default. The platform
+    # generates its own MariaDB root password, which 10-db-tune.sh tries to
+    # discover (via /root/.my.cnf, the platform's cnf locations, then passwordless
+    # socket auth). Set this field to that root password if discovery fails:
+    # Dashboard > the DB node > Credentials.
     env:
       CIVICRM_DB_NAME: civicrm
       CIVICRM_DB_USER: civicrm
       CIVICRM_DB_PASS: ${settings.dbPass}
+      CIVICRM_MYSQL_ROOT_PASSWORD: ${settings.dbRootPass}
 
 # -----------------------------------------------------------------------------
 # Provisioning
