@@ -76,6 +76,36 @@ Two defences, both in `05-enable-php-ext.sh`:
 `extension_dir` comes from `php -r 'echo ini_get("extension_dir");'` rather than
 `php --ini`, which is why it was never affected.
 
+## Gotcha: a syntax error in php.ini silently discards everything after it
+
+PHP's ini parser reports a parse error and then **stops parsing that file**. Every
+directive below the bad line is silently ignored — no second warning, no failure.
+Verified locally: given a file with `this is (not valid ini` on line 2, a
+`memory_limit` set on line 1 is honoured, while a `post_max_size` on line 3 falls
+back to its compiled default of `8M`.
+
+This platform's `/etc/php.ini` has such a line at **line 688**. So:
+
+- appending `extension=intl.so` to the end of it does nothing at all, and the
+  only clue is PHP's `syntax error, unexpected '(' in /etc/php.ini on line 688`
+  on stderr — while `php -m` still exits 0 and prints a normal module list
+- `/etc/php.d` is reported as the scan directory but does not appear to be
+  honoured, so a drop-in there is equally ineffective
+
+`05-enable-php-ext.sh` therefore **prepends** its directive to the top of
+`php.ini`, above any parse error, rather than appending. Two safeguards go with
+it:
+
+- the pristine file is copied to `<php.ini>.civi-orig` first, and restored
+  byte-for-byte on any failure. `sed`-editing a file the platform owns is how you
+  leave a node that cannot start PHP at all.
+- PHP's complaints are captured **before** anything is changed, so a
+  pre-existing parse error is reported as pre-existing rather than as damage we
+  did.
+
+If the box eventually works but settings seem ignored, that broken line is the
+reason. Fix it through **node → Config → etc → php.ini**.
+
 ## The ephemeral case
 
 A compiled extension lives in the container filesystem, not on the volume, so a
