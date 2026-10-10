@@ -116,9 +116,6 @@ SSHRUN = CIVICRM_SSH_TARGET=$(TARGET) CIVICRM_SSH_USER=$(SSH_USER) CIVICRM_SSH_K
 preflight: ## Verify the PHP runtime against CiviCRM's requirements
 	$(SSHRUN) $(SCRIPTS)/00-preflight.sh
 
-.PHONY: ext-intl
-ext-intl: ## Enable the intl extension (CiviCRM requires it)
-	$(SSHRUN) $(SCRIPTS)/05-enable-php-ext.sh
 
 .PHONY: fetch
 fetch: ## Re-materialise the release code and bind volumes
@@ -137,8 +134,6 @@ health: ## Full healthcheck: runtime, layout, DB, extension, cron
 # the database and the uploaded extension archive.
 .PHONY: provision
 provision: ## Re-run all provisioning steps on the existing box (no re-import)
-	$(SSHRUN) $(SCRIPTS)/05-enable-php-ext.sh
-	$(SSHRUN) $(SCRIPTS)/06-disable-default-auth.sh
 	$(SSHRUN) $(SCRIPTS)/00-preflight.sh
 	$(SSHRUN) $(SCRIPTS)/20-fetch-civicrm.sh
 	$(SSHRUN) $(SCRIPTS)/30-install-civicrm.sh
@@ -156,19 +151,25 @@ push-scripts: ## Copy the deploy scripts onto the box
 logs: ## Tail the CiviCRM log
 	$(SSH) 'find $(CIVICRM_DATA_DIR)/private/log -name "*.log" -exec tail -f {} +'
 
-# 10-db-tune.sh runs on the DATABASE node, not the app node, so it needs that
-# node's SSH address. Jelastic shows it on the database node's page; without it
-# the DB step can only be reached by re-importing.
+# The database and app user are created by the official mariadb image itself,
+# from MARIADB_DATABASE / _USER / _PASSWORD in the manifest. There is no bootstrap
+# step to run.
+#
+# What is left is administering it by hand, which needs the DB node's SSH address
+# (shown on that node's page in the dashboard) and the dbRootPass setting.
 DB_TARGET ?= $(TARGET)-db
-.PHONY: db-tune
-db-tune: ## Apply the CiviCRM database tuning and create the app user (DB node)
-	@test -n "$(DB_TARGET)" || { echo "Set DB_TARGET to the database node's SSH address"; exit 1; }
-	CIVICRM_SSH_TARGET=$(DB_TARGET) CIVICRM_SSH_USER=$(SSH_USER) CIVICRM_SSH_KEY=$(SSH_KEY) \
-	  bash $(SCRIPTS)/ssh-run.sh $(SCRIPTS)/10-db-tune.sh
+DB_ROOT_PASS ?=
 
 .PHONY: db
 db: ## Open a MySQL client on the CiviCRM database
 	$(SSH) 'mysql -u civicrm -p"$$CIVICRM_DB_PASS" civicrm'
+
+.PHONY: db-root
+db-root: ## Open a MySQL client as root (set DB_TARGET and DB_ROOT_PASS)
+	@test -n "$(DB_TARGET)" || { echo "Set DB_TARGET to the database node's SSH address"; exit 1; }
+	@test -n "$(DB_ROOT_PASS)" || { echo "Set DB_ROOT_PASS to the dbRootPass setting from the manifest"; exit 1; }
+	CIVICRM_SSH_TARGET=$(DB_TARGET) CIVICRM_SSH_USER=$(SSH_USER) CIVICRM_SSH_KEY=$(SSH_KEY) \
+	  bash -c 'ssh ${0} "mysql -u root -p\"\$1\""' "$(SSH_USER)@$(DB_TARGET)" "$(DB_ROOT_PASS)"
 
 .PHONY: sql
 sql: ## Run a query: make sql Q="SELECT COUNT(*) FROM civicrm_contact"
@@ -177,6 +178,34 @@ sql: ## Run a query: make sql Q="SELECT COUNT(*) FROM civicrm_contact"
 .PHONY: shell
 shell: ## Interactive SSH into the box
 	$(SSH)
+
+# =============================================================================
+# IMAGE
+#
+# The manifest points its cp node at a custom image, so the image has to exist in
+# a registry the platform can pull from BEFORE you import. `make image-push` is
+# therefore a prerequisite of a first install, not a convenience.
+# =============================================================================
+IMAGE        ?= raggedstaff/civi-dev-box
+IMAGE_TAG    ?= 8.5.11
+IMAGE_REPO   := $(IMAGE):$(IMAGE_TAG)
+
+.PHONY: image-build
+image-build: ## Build the application image
+	docker build -t "$(IMAGE_REPO)" .
+	@echo "  built $(IMAGE_REPO)"
+
+.PHONY: image-push
+image-push: ## Push the image so the platform can pull it
+	@test -n "$(IMAGE)" || { echo "Set IMAGE to your registry path, e.g. raggedstaff/civi-dev-box"; exit 1; }
+	docker push "$(IMAGE_REPO)"
+	@echo ""
+	@echo "  pushed $(IMAGE_REPO)"
+	@echo "  now import the manifest - its appImage field defaults to this."
+
+.PHONY: image-test
+image-test: ## Boot the image locally and check it serves and denies private/
+	@bash tests/image-test.sh
 
 # =============================================================================
 # MANIFEST DEPLOY
@@ -194,11 +223,16 @@ deploy: ## Install the JPS manifest via the Jelastic REST API
 .PHONY: validate
 validate: ## Sanity-check the manifest locally
 	@python3 -c "import yaml; d=yaml.safe_load(open('jps/civi-standalone.jps')); \
+	             f={x['name']: x for x in d['settings']['fields']}; \
 	             print('  type    :', d['type']); \
-	             print('  nodes   :', [n['nodeType'] for n in d['nodes']]); \
-	             print('  phpTag  :', d['settings']['fields'][4]['default']); \
+	             print('  images  :', [n['image'] for n in d['nodes']]); \
+	             print('  appImage:', f['appImage']['default']); \
+	             print('  dbImage :', f['dbImage']['default']); \
 	             print('  fields  :', len(d['settings']['fields'])); \
-	             print('  events  :', [k for k in d if k.startswith('on')])"
+	             print('  events  :', [k for k in d if k.startswith('on')]); \
+	             assert all('image' in n and 'nodeType' not in n for n in d['nodes']), \
+	               'a node still declares nodeType - custom images should not'; \
+	             print('  OK')"
 
 .PHONY: check-docs
 check-docs: ## Every `make <target>` mentioned in the docs must actually exist

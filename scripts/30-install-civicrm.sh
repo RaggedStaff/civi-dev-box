@@ -36,7 +36,7 @@ if civicrm_installed; then
 fi
 
 # --- Settings --------------------------------------------------------------
-# Default these the same way 10-db-tune.sh does. It creates the user with
+# Default these the same way the MariaDB image's env block does. It creates the user with
 # CIVICRM_DB_USER defaulted to 'civicrm', so defaulting here too keeps the two
 # scripts in agreement; without it, running this script without the node env set
 # dies on `set -u` with "CIVICRM_DB_USER: unbound variable".

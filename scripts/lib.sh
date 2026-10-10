@@ -232,7 +232,10 @@ check_php_extensions() {
 # The DB host is normally injected by the Jelastic `links` mechanism as
 # DB_IP_ADDRESS, but resolve defensively so the script also works over SSH.
 resolve_db_host() {
-  if [ -n "$CIVICRM_DB_HOST" ]; then printf '%s' "$CIVICRM_DB_HOST"; return 0; fi
+  # Default before use: every script runs under `set -u`, so referencing an
+  # optional override that has not been set aborts the script.
+  local override="${CIVICRM_DB_HOST:-}"
+  if [ -n "$override" ]; then printf '%s' "$override"; return 0; fi
   local candidate
   for candidate in "${DB_IP_ADDRESS:-}" "${DB_HOST:-}" "${MYSQL_HOST:-}" "${DB_PRIVATE_IP:-}"; do
     [ -n "$candidate" ] && { printf '%s' "$candidate"; return 0; }

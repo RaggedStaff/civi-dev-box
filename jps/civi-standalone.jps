@@ -6,63 +6,71 @@
 #   https://raw.githubusercontent.com/RaggedStaff/civi-dev-box/main/jps/civi-standalone.jps
 #
 # There is no `jps` CLI - JPS is the manifest format, not a command. For a
-# scripted install see "Deploying" in the README, which uses the Jelastic REST
-# API endpoint environment/control/importmanifest.
+# scripted install see "Deploying" in the README.
 #
 # Target: app.jpe.infomaniak.com (Jelastic PaaS, public provider)
 # Site:   https://dev.civi.sioldata.com
 #
-# Stack (deliberately pinned):
-#   app server : apache (Apache + PHP)
-#   php        : 8.5.11
-#   database   : mariadb-dockerized 11.8.9 (LTS)
-#   civicrm    : 6.18.2 Standalone
+# ---------------------------------------------------------------------------
+# ARCHITECTURE: WHY THIS USES CUSTOM IMAGES
 #
-# WHY PHP 8.5
-#   Two independent reasons, which is why this was not a close call:
+# Both nodes are Docker images rather than the provider's certified stacks:
 #
-#   1. CiviCRM pairs the versions explicitly. Its requirements page says
-#      "PHP: PHP 8.3, 8.4 or 8.5 is recommended (8.4 runs with CiviCRM
-#      6.12-6.15, 8.5 with 6.16+)". This box runs 6.18.2, so 8.5 is the
-#      matched pair.
+#   cp    - built from civicrm/civicrm-base:php8.5, in this repo's Dockerfile.
+#           That base is Debian 12 / amd64, both of which are inside the
+#           platform's supported base-OS allowlist, and it already provides
+#           PHP 8.5.11, intl compiled in, DocumentRoot /var/www/html and
+#           AllowOverride All.
+#   sqldb - the official mariadb image, whose MARIADB_USER / MARIADB_PASSWORD /
+#           MARIADB_DATABASE variables create the database and user on first
+#           start. No bootstrap script is needed.
 #
-#   2. dfc_civicrm permits it:
-#      <php_compatibility>8.1 8.2 8.3 8.4 8.5</php_compatibility>
+# An earlier version of this manifest used the certified PHP stack and a
+# mariadb-dockerized node, and could not be installed. Six separate failures
+# were all properties of those images rather than of anything in this repo:
 #
-#   HISTORY, because it was the other way round until 2026-10-08: this manifest
-#   pinned 8.4 and cited the extension as the reason, because the reference
-#   info.xml on docs.civicrm.org listed only 8.1-8.4, which made 8.4 act as a
-#   ceiling. The extension lifted it - its own tools/preflight.sh records this -
-#   so the rationale above replaced the old one rather than contradicting it.
+#   1. intl shipped disabled. CiviCRM requires it, so preflight refused.
+#   2. The provider's /etc/php.ini had a syntax error on line 688, and PHP
+#      discards every directive after a parse error - silently, while `php -m`
+#      still exits 0 and prints a normal module list.
+#   3. `php --ini` printed its paths wrapped in double quotes, so a parser that
+#      split on the colon captured '"/etc/php.ini"' and wrote to a file of
+#      that name in the working directory.
+#   4. The document root was /var/www/html, not the path the scripts assumed.
+#   5. The Apache template shipped with HTTP Basic Auth on the document root.
+#   6. The platform generates the database root password, and does not expose
+#      it where a provisioning script can rely on it.
 #
-#   CiviCRM enforces the declared php_compatibility range at registration, so
-#   raising phpTag past 8.5 without first adding <ver>8.6</ver> to the
-#   extension's info.xml will break `cv ext:enable`.
+# A custom image removes that class of problem rather than working around it.
+# ---------------------------------------------------------------------------
+#
+# PHP / CIVICRM VERSIONS
+#   PHP 8.5.11 matches what dfc_civicrm permits (php_compatibility 8.1-8.5) and
+#   what CiviCRM pairs with releases 6.16+ ("8.5 with 6.16+"). dfc_civicrm
+#   permitted 8.5 only from 2026-10-08; before that 8.4 was acting as a ceiling
+#   because the reference info.xml on docs.civicrm.org listed only 8.1-8.4.
+#
+#   The PHP version is baked into the image. The CIVICRM version is NOT - it is
+#   fetched at install time, so one image serves several CiviCRM versions.
 #
 # WHAT THIS MANIFEST DOES *NOT* DO
 #   It does not deploy the extension. The extension has no git remote and its
 #   vendor/ + composer.lock are gitignored, so there is nothing to fetch here.
-#   It is deployed afterwards as a built archive - see README and
-#   `make ext-install` / `make ext-verify`. The onInstall step below still
-#   supports a source URL for completeness, but expect to leave it blank.
+#   It is deployed afterwards as a built archive - see the README and
+#   `make ext-install` / `make ext-verify`.
 # =============================================================================
 type: install
 version: 1.0
 name: CiviCRM Standalone Dev Box (dfc_civicrm)
 description: |
-  CiviCRM Standalone on Apache/PHP + MariaDB, tuned to CiviCRM's
-  documented requirements, for testing the dfc_civicrm native extension.
+  CiviCRM Standalone for testing the dfc_civicrm native extension.
 
-  * CiviCRM 6.18.2 Standalone served from the domain root (as required)
-  * PHP 8.5.11, MariaDB 11.8.9
-  * Database tuned: sql_mode without ONLY_FULL_GROUP_BY/ANSI, utf8mb4,
-    thread_stack 256k, trusted function creators
-  * private/, public/, ext/ on persistent volumes; survive redeploy
-  * Release code re-materialised automatically on container restart
+  * PHP 8.5.11 (Apache + mod_php), intl compiled in
+  * MariaDB 12.3, utf8mb4, CiviCRM's documented sql_mode
+  * private/, public/ and ext/ on a persistent volume; survive redeploy
   * Demo data is a deployment-time choice
 
-  The extension itself is deployed separately as a built archive - the
-  manifest deliberately does not try to fetch it.
+  Both nodes are custom Docker images; see the architecture note above for why.
 homepage: https://dev.civi.sioldata.com
 appVersion: 6.18.2
 displayName: ${settings.envName}
@@ -94,6 +102,48 @@ settings:
         Baked into the install by `cv core:install --cms-base-url`. Must be the
         final stable URL - changing it later means re-installing.
 
+    - caption: Application image
+      type: string
+      name: appImage
+      default: "raggedstaff/civi-dev-box:8.5.11"
+      hideLabel: false
+      description: |
+        Built by this repo's Dockerfile. It MUST be pullable by the platform:
+        push it to a registry first (`make image-push IMAGE=...`), or add a
+        private registry in the dashboard under Custom templates.
+
+        Its base is civicrm/civicrm-base:php8.5, which is Debian 12 / amd64 -
+        both inside the platform's supported base-OS list.
+
+    - caption: Database image
+      type: string
+      name: dbImage
+      default: "mariadb:12.3"
+      hideLabel: false
+      description: |
+        The official MariaDB image. Its base is Ubuntu 24.04, which is also
+        inside the supported list. MARIADB_DATABASE / _USER / _PASSWORD below
+        create the database and user on first start, so no bootstrap script is
+        needed.
+
+    - caption: MariaDB root password
+      type: password
+      name: dbRootPass
+      default: civiRoot!2026
+      hideLabel: false
+      description: |
+        Ours, not the platform's. Only used to administer the database by hand
+        (`make db-root`). The application connects as the civiRM user below.
+
+    - caption: Database password
+      type: password
+      name: dbPass
+      default: civiDb!2026
+      hideLabel: false
+      description: |
+        Supplied rather than generated so the database node and the PHP node
+        use the same credentials without cross-node plumbing.
+
     - caption: Install CiviCRM demo (sample) data
       type: checkbox
       name: demoData
@@ -108,26 +158,9 @@ settings:
       name: civicrmVersion
       default: 6.18.2
       hideLabel: false
-
-    - caption: PHP tag
-      type: string
-      name: phpTag
-      default: "8.5.11"
-      hideLabel: false
       description: |
-        8.5 is what CiviCRM pairs with releases 6.16+, and dfc_civicrm declares
-        php_compatibility 8.1-8.5. Confirm this exact patch tag exists on your
-        panel before installing - the Cloud Scripting reference lists only PHP
-        7.4/8.0/8.1 as engines and is stale. Raising this above 8.5 needs
-        <ver>8.6</ver> added to the extension's info.xml first, because CiviCRM
-        enforces the declared range at registration.
-
-    - caption: MariaDB tag
-      type: string
-      name: mariadbTag
-      default: "11.8.9"
-      hideLabel: false
-      description: 11.4 or 11.8 LTS recommended by CiviCRM.
+        Downloaded at install time, so it is independent of the image tag.
+        Verified to exist upstream.
 
     - caption: PHP cloudlets
       type: spinner
@@ -156,20 +189,15 @@ settings:
       default: civiAdmin!2026
       hideLabel: false
 
-    - caption: Database password
-      type: password
-      name: dbPass
-      default: civiDb!2026
-      hideLabel: false
-      description: |
-        Supplied rather than generated so the database node and the PHP node use
-        the same credentials without cross-node plumbing.
-
     - caption: Persistent data directory
       type: string
       name: dataDir
       default: /var/lib/civicrm-data
       hideLabel: false
+      description: |
+        private/, public/ and ext/ are symlinked here by 20-fetch-civicrm.sh,
+        so uploads, civicrm.settings.php and installed extensions survive a
+        container replacement.
 
     - caption: Extension key
       type: string
@@ -194,24 +222,10 @@ settings:
 # Topology
 # -----------------------------------------------------------------------------
 nodes:
-  # Apache + PHP, not NGINX.
-  #
-  # CiviCRM's Standalone release ships .htaccess files - that is how it keeps
-  # private/ unreadable (private/ holds civicrm.settings.php, i.e. the DB
-  # credentials) and routes /civicrm/* through its front controller. Apache
-  # honours those rules as shipped; NGINX ignores .htaccess and would need them
-  # reimplemented by hand in a vhost.
-  #
-  # dfc_civicrm registers its own routes via xml/Menu/dfc_civicrm.xml, so it
-  # needs no rewriting of its own - but CiviCRM core still does.
-  #
-  # nodeType `apache` is the documented Cloud Scripting identifier for the
-  # Apache+PHP template (alias `apache2`). There is no "apachephp-dockerized".
-  - nodeType: apache
+  # Custom image, not the certified apache/php stack - see the architecture note.
+  - image: ${settings.appImage}
     nodeGroup: cp
     displayName: CiviCRM
-    engine: php8.5
-    tag: ${settings.phpTag}
     cloudlets: ${settings.cpCloudlets}
     scalingMode: STATELESS
     diskLimit: 20
@@ -236,10 +250,11 @@ nodes:
       CIVICRM_EXT_KEY: ${settings.extKey}
       CIVICRM_EXT_SOURCE: ${settings.extSource}
 
-  - nodeType: mariadb-dockerized
+  # Official MariaDB image. MARIADB_DATABASE / _USER / _PASSWORD create the
+  # database and user on first start, which is why there is no bootstrap script.
+  - image: ${settings.dbImage}
     nodeGroup: sqldb
     displayName: MariaDB
-    tag: ${settings.mariadbTag}
     cloudlets: ${settings.dbCloudlets}
     diskLimit: 20
     scalingMode: STATEFUL
@@ -247,25 +262,12 @@ nodes:
     isDeploySupport: false
     volumes:
       - /var/lib/mysql
-      - /var/log/mysql
-    # 10-db-tune.sh creates the schema and user from these. Without them it
-    # would die with "CIVICRM_DB_PASS must be provided" - it reads the
-    # environment, never positional arguments.
-    #
-    # No root password is needed here. `links: [sqldb:DB]` above means the
-    # platform propagates the DB node's own environment to this node, and the
-    # documented consequence is:
-    #
-    #     variable MYSQL_ROOT_PASSWORD from sql node is DB_MYSQL_ROOT_PASSWORD
-    #     in cp node
-    #
-    # So DB_MYSQL_ROOT_PASSWORD is present on this node, which is where
-    # 10-db-tune.sh reads the admin password from. Setting it explicitly here
-    # would override the platform's own value and break that.
     env:
-      CIVICRM_DB_NAME: civicrm
-      CIVICRM_DB_USER: civicrm
-      CIVICRM_DB_PASS: ${settings.dbPass}
+      MARIADB_ROOT_PASSWORD: ${settings.dbRootPass}
+      MARIADB_DATABASE: civicrm
+      MARIADB_USER: civicrm
+      MARIADB_PASSWORD: ${settings.dbPass}
+      MARIADB_AUTO_UPGRADE: "1"
 
 # -----------------------------------------------------------------------------
 # Provisioning
@@ -274,91 +276,35 @@ nodes:
 # URL for this repo, or override it as an extra setting on the API import call
 # (see "Deploying" in the README).
 #
-# Without a reachable baseUrl the environment still creates; only the
-# provisioning steps are skipped. You can then run the same scripts by hand over
-# SSH:  make up
+# WITHOUT a reachable baseUrl the environment still creates; only the
+# provisioning steps are skipped. You can then run the same scripts over SSH:
+#   make provision
+#
+# Scripts MUST be run as files, not piped into `bash -s`. A script read from
+# stdin has no BASH_SOURCE, so every script's `. lib.sh` line resolves to
+# "/lib.sh" and the run dies with "BASH_SOURCE[0]: unbound variable".
 # -----------------------------------------------------------------------------
 baseUrl: https://raw.githubusercontent.com/raggedstaff/civi-dev-box/main/
 
 onInstall:
 
-  # --- 0. Fetch the scripts to a real directory ----------------------------
-  # Scripts MUST be run as files, not piped into `bash -s`.
-  #
-  # When bash reads a script from stdin, BASH_SOURCE is unset - $0 is just
-  # "bash". Every script's `. lib.sh` line then resolved to "/lib.sh", so the
-  # whole install died with:
-  #     bash: line 9: BASH_SOURCE[0]: unbound variable
-  #     bash: line 9: /lib.sh: No such file or directory
-  # Writing to $d fixes that and puts lib.sh next to each script, which is
-  # where the scripts look for it.
-  #
-  # curl || wget because the mariadb-dockerized image may not ship curl. The
-  # trailing `|| exit 1` matters: a silent fetch failure would otherwise leave a
-  # zero-byte script and fail later with a much more confusing message.
-  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 05-enable-php-ext.sh 06-disable-default-auth.sh 00-preflight.sh 20-fetch-civicrm.sh 30-install-civicrm.sh 40-install-extension.sh 90-healthcheck.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
+  # --- 0. Fetch the scripts ------------------------------------------------
+  # curl || wget, and `|| exit 1`: a silent fetch failure leaves a zero-byte
+  # script that fails later with a much more confusing message.
+  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 20-fetch-civicrm.sh 30-install-civicrm.sh 90-healthcheck.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
 
-  - cmd [sqldb]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 10-db-tune.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
-
-  # --- 1. Enable the PHP extensions the platform ships but does not load ----
-  # The image has intl disabled and CiviCRM requires it ("PHP INTL - required
-  # for outputting localized formatted number strings from CiviCRM 5.28
-  # onwards"), so preflight would refuse. The platform's PHP Extensions docs
-  # list intl.so among the dynamic extensions available to Apache PHP, so the
-  # usual outcome is that the binary is already on disk and just needs
-  # enabling. This discovers the paths at runtime rather than assuming
-  # /usr/lib64/php/modules or /usr/local/etc/php.
-  - cmd [cp]: bash "$HOME/.civi-scripts/05-enable-php-ext.sh"
-
-  # --- 2. Fail fast if the runtime does not satisfy CiviCRM --------------
-  # Note the deliberate absence of `|| die '...'`. die() is a function from our
-  # own lib.sh; it does not exist in the shell Jelastic runs cmd entries in, so
-  # using it replaced the real exit status with "die: command not found" (127)
-  # and hid the actual failure. A non-zero exit already aborts the install.
-  - cmd [cp]: bash "$HOME/.civi-scripts/00-preflight.sh"
-
-  # --- 3. Remove the provider's default HTTP Basic Auth -----------------
-  # The Apache PHP template ships with basic auth enabled so a fresh container
-  # is not left serving to the world. Until it is removed, every request to the
-  # site returns 401 and the browser prompts for credentials.
-  - cmd [cp]: bash "$HOME/.civi-scripts/06-disable-default-auth.sh"
-
-  # --- 4. Database: tuning + schema/user --------------------------------
-  # No arguments: 10-db-tune.sh reads CIVICRM_DB_NAME / _USER / _PASS from the
-  # environment (see the sqldb node's env block). It was previously handed the
-  # password as '$1', which the script never read - so it would have died on an
-  # empty password even with the sourcing fixed.
-  - cmd [sqldb]: bash "$HOME/.civi-scripts/10-db-tune.sh"
-
-  # --- 5. Release code into the document root + bind volumes ------------
-  # CIVICRM_VERSION and CIVICRM_SITE_URL come from the cp node's env block.
+  # --- 1. Release code into the document root + bind volumes --------------
+  # The image already provides intl, php.ini, the document root and the
+  # private//core/ deny rules, so there is nothing to discover or repair here.
   - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
 
-  # --- 6. Non-interactive install ----------------------------------------
+  # --- 2. Non-interactive install -----------------------------------------
   - cmd [cp]: bash "$HOME/.civi-scripts/30-install-civicrm.sh"
 
-  # --- 7. Optional source-based extension deploy ------------------------
-  # Skipped unless extSource is set. The dfc_civicrm archive workflow
-  # (make ext-install) is the normal path.
-  - if:
-      condition: ${settings.extSource}
-      then:
-        # No `--` separator: with the script as a file, everything after the
-        # filename is already a positional parameter, so `bash f -- --link`
-        # would pass "$1=--" and the argument parser would reject it.
-        - cmd [cp]: bash "$HOME/.civi-scripts/40-install-extension.sh" --link
-
-# Self-heal: the app tree is ephemeral, so re-materialise the release code
-# every time the PHP container restarts. Data volumes are untouched, so this is
-# cheap and idempotent.
+# The app tree is ephemeral, so re-materialise the release code on every restart.
+# Data volumes are untouched, so this is cheap and idempotent.
 onAfterRestartNode [cp]:
-  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 05-enable-php-ext.sh 06-disable-default-auth.sh 20-fetch-civicrm.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
-  # Re-enable intl before anything else: if it had to be compiled, it lives in
-  # the container filesystem and is gone after a node replacement.
-  - cmd [cp]: bash "$HOME/.civi-scripts/05-enable-php-ext.sh"
-  # Same for the Apache config - it lives in the container filesystem too, so a
-  # node replacement restores the 401 prompt.
-  - cmd [cp]: bash "$HOME/.civi-scripts/06-disable-default-auth.sh"
+  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 20-fetch-civicrm.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
   - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
 
 startPage: ${settings.siteUrl}/civicrm/login
@@ -367,15 +313,14 @@ success: |
   ### CiviCRM dev box is ready
 
   - **Site**: ${settings.siteUrl}/civicrm/login
-  - **Admin**: `${settings.adminEmail}` / your chosen password
-  - **PHP**: `${settings.phpTag}` &nbsp;&nbsp; **DB**: `${settings.mariadbTag}` &nbsp;&nbsp; **CiviCRM**: `${settings.civicrmVersion}`
-  - **Demo data**: `${settings.demoData}`
+  - **Admin**: `${settings.adminEmail}` / the admin password you chose
+  - **CiviCRM**: ${settings.civicrmVersion} &nbsp;&nbsp; **Demo data**: ${settings.demoData}
 
   #### 1. Confirm private/ is not web-readable
 
-      curl -sI ${settings.siteUrl}/private/civicrm.settings.php   # expect 403/404
+      curl -sI ${settings.siteUrl}/private/civicrm.settings.php   # expect 403
 
-  Apache honours the release's own .htaccess rules, so this should already hold.
+  The image ships that deny rule, so it is already in place.
 
   #### 2. Deploy the extension (not done by this manifest)
 
@@ -390,7 +335,5 @@ success: |
 
   Dashboard > CUSTOMER > Cron Jobs, using `ops/crontab`.
 
-  #### 4. App server
-
-  Apache is used deliberately: the CiviCRM release protects `private/` with
-  `.htaccess`, which only Apache honours. Nothing further to configure.
+  cron itself is installed and running in the image, so this is the only
+  remaining step. Without it, scheduled mailings and the job queue are inert.

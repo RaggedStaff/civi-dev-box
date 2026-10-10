@@ -30,10 +30,43 @@ provides the box, then runs the ones already written.**
 
 | Component  | Version    | Rationale |
 | ---------- | ---------- | --------- |
-| App server | Apache + PHP | `apache` — see below |
+| App image  | custom | `civicrm/civicrm-base:php8.5` — see below |
 | PHP        | **8.5.11** | Matches CiviCRM 6.16+; the extension allows it |
-| Database   | **MariaDB 11.8.9** | CiviCRM documents *"11.4+ recommended"*; LTS |
-| CiviCRM    | **6.18.2** | Current Standalone release |
+| Database   | **`mariadb:12.3`** | Official image; creates the DB and user itself |
+| CiviCRM    | **6.18.2** | Downloaded at install time, not baked into the image |
+
+### Why custom images
+
+Both nodes are Docker images rather than the provider's certified stacks. That
+is not a preference — the certified ones could not be installed at all. Six
+separate import failures were every one a property of those images rather than of
+anything in this repo:
+
+1. **`intl` shipped disabled.** CiviCRM requires it, so preflight refused.
+2. **The provider's `php.ini` had a syntax error on line 688**, and PHP discards
+   every directive after a parse error — *silently*: `php -m` still exits 0 and
+   prints a normal module list. An appended `extension=intl.so` landed below the
+   error and did nothing.
+3. **`php --ini` printed its paths wrapped in double quotes.** Splitting on the
+   colon captured `"/etc/php.ini"` including the quotes, so every write went to a
+   file of that name in the working directory instead of the real config.
+4. **The document root was `/var/www/html`**, not the path the scripts assumed.
+5. **The Apache template shipped with HTTP Basic Auth** on the document root.
+6. **The platform generates the database root password** and does not expose it
+   where a provisioning script can rely on it.
+
+`civicrm/civicrm-base:php8.5` is Debian 12 / amd64 — both inside the platform's
+supported base-OS allowlist — and already provides PHP 8.5.11, `intl` compiled
+in, `DocumentRoot /var/www/html`, `AllowOverride All` and no Basic Auth. The
+`mariadb` image creates the database and user from `MARIADB_USER` /
+`MARIADB_PASSWORD` / `MARIADB_DATABASE`, so there is no bootstrap script.
+
+The Dockerfile verifies all of it **at build time**, so a missing requirement
+fails the build rather than an import.
+
+**Trade-off:** you lose the platform's certified-stack integration — its php.ini
+management, its auto-tuned `my.cnf`, its dashboard PHP settings. That is the
+point: you own that config now, in one readable file.
 
 ### Why PHP 8.5
 
@@ -113,7 +146,24 @@ The same scripts therefore work whether run by the manifest or by hand over SSH.
 
 ## Deploying
 
-### 1. Publish these scripts (see the FAQ at the bottom for why)
+### 1. Build and push the image
+
+The manifest's app node points at a custom image, so **the image must be
+pullable by the platform before you import**:
+
+```bash
+make image-build IMAGE=raggedstaff/civi-dev-box     # or any registry path
+make image-push  IMAGE=raggedstaff/civi-dev-box
+make image-test                                     # boots it, checks it serves
+```
+
+`make image-test` is the local acceptance check: it confirms HTTP 200 on `/` and
+**403 on `/private/civicrm.settings.php`** — the credential leak, closed.
+
+If you would rather not publish publicly, add a private registry in the dashboard
+under *Custom templates* and point `appImage` at it.
+
+### 2. Publish these scripts (see the FAQ at the bottom for why)
 
 ```bash
 git remote -v      # push this repo to your org
@@ -121,7 +171,7 @@ git remote -v      # push this repo to your org
 #   baseUrl: https://raw.githubusercontent.com/<org>/civi-dev-box/main/
 ```
 
-### 2. Install the environment
+### 3. Install the environment
 
 There is **no `jps` CLI** — JPS is the *manifest format*, not a command. Two ways
 to install it:
@@ -159,7 +209,7 @@ name; `baseUrl` can be overridden the same way. To get a session token, copy the
 authentication enabled. `make deploy` wraps the curl above if you'd rather not
 type it.
 
-### 3. Iterating without re-importing
+### 4. Iterating without re-importing
 
 You do **not** have to delete and re-import to try a change. Once an environment
 exists, push the script and run it in place:
@@ -170,7 +220,7 @@ make provision   # intl -> auth -> preflight -> fetch -> install -> health
 
 That keeps the volumes, the database and any uploaded extension archive. Each
 step is also a target on its own (`make fetch`, `make install`, `make health`,
-`make ext-intl`), so you can re-run just the step you changed.
+`make fetch`, `make install`, `make health`), so you can re-run just the step you changed.
 
 It needs SSH access to the app node — Dashboard → the node → **SSH**, which gives
 you the `root@…` address to pass as `TARGET`:
@@ -184,10 +234,12 @@ the box, then executes the file. Note that the obvious alternative,
 `ssh host 'bash -s' < script.sh`, does not work: a script read from stdin has no
 `BASH_SOURCE`, so every script's `. lib.sh` line resolves to `/lib.sh`.
 
-The database step is separate, because it runs on the *database* node:
+There is no database step to run: the official `mariadb` image creates the
+database and user from `MARIADB_DATABASE` / `_USER` / `_PASSWORD` in the manifest.
+To administer it by hand:
 
 ```bash
-make db-tune DB_TARGET=root@node219318-civi-dev-db
+make db-root DB_TARGET=root@<db-node> DB_ROOT_PASS=<dbRootPass>
 ```
 
 **Why re-import anyway.** The JPS hooks only run on install, and the
@@ -197,7 +249,7 @@ container-level changes that the platform itself applies at creation time. Reuse
 the environment for iterating on scripts; re-import when the *topology* or the
 node configuration changes.
 
-### 4. Deploy the extension
+### 5. Deploy the extension
 
 The manifest deliberately does **not** deploy the extension, because
 `dfc_civicrm` has **no git remote** and its `vendor/` + `composer.lock` are
@@ -216,7 +268,7 @@ make ext-verify     # their tools/verify-install.sh, on the box
 `ext-build` delegates to the extension's own scripts. This project does not
 reimplement their gates.
 
-### 5. One manual step JPS cannot do
+### 6. One manual step JPS cannot do
 
 **Cron.** Scheduled mailings, the job queue and reminders all need it. Install
 [`ops/crontab`](ops/crontab) via Dashboard → CUSTOMER → Cron Jobs.
@@ -229,7 +281,7 @@ curl -sI https://dev.civi.sioldata.com/private/civicrm.settings.php   # 403 or 4
 curl -sI https://dev.civi.sioldata.com/core/civicrm/version.php      # 403 or 404
 ```
 
-### 6. Verify
+### 7. Verify
 
 ```bash
 make health         # runtime, layout, DB, extension, cron — one command
@@ -283,7 +335,6 @@ plus `http://localhost` for the version probe. It asserts:
 
 | Symptom | Cause |
 | --- | --- |
-| Every page asks for a username/password | The provider's Apache template ships with HTTP Basic Auth enabled so a fresh container isn't serving to the world. `06-disable-default-auth.sh` removes it. If it persists, the auth lives outside the places that script looks: `grep -rniE 'AuthType\|Require valid-user' /etc/httpd /etc/apache2`. |
 | `cv ext:enable` refuses the extension | `php_compatibility` excludes the running PHP. dfc_civicrm declares 8.1–8.5; the box is 8.5.11. Raising `phpTag` past 8.5 causes exactly this. |
 | `top-level directory does not match extension key` | The archive's root dir must be `dfc_civicrm/`, because CiviCRM resolves `<ext-dir>/<key>/<file>.php`. |
 | `archive is missing part of the vendored DFC connector subset` | Built with `--no-vendor`. Rebuild with `tools/build-release.sh --force`. |
@@ -300,13 +351,11 @@ plus `http://localhost` for the version probe. It asserts:
 ## Files
 
 ```
+Dockerfile                 the application image (FROM civicrm/civicrm-base:php8.5)
 jps/civi-standalone.jps     the install image — import this
 scripts/
   lib.sh                    shared helpers, path/DB discovery
-  05-enable-php-ext.sh      enable intl, which CiviCRM requires and the image ships disabled
-  06-disable-default-auth.sh  remove the provider's default HTTP Basic Auth prompt
   00-preflight.sh           fail fast on an unsatisfying runtime
-  10-db-tune.sh             CiviCRM's documented DB requirements  [runs on sqldb]
   20-fetch-civicrm.sh       release code + bind volumes + .user.ini
   30-install-civicrm.sh     cv core:install, idempotent
   40-install-extension.sh   source-based deploy (git URL or local path)
@@ -317,6 +366,9 @@ scripts/
 ops/
   README-apache.md          why Apache, and what is auto-configured
   crontab                   CiviCRM scheduled jobs
+tests/
+  image-test.sh             boots the image, asserts it serves and denies private/
+  docroot-test.sh           document-root discovery against real httpd -S output
 ext-template/               a minimal valid extension, for testing the deploy path
 ```
 
@@ -340,15 +392,9 @@ ext-template/               a minimal valid extension, for testing the deploy pa
   to a `NoSuchKey` — so there is nothing to fetch automatically and the default
   path rests on TLS alone. Set `CIVICRM_SHA256` to an out-of-band value to make
   it a verified download; the script says so out loud when it is unset.
-- **Cron cannot be created from JPS** on Jelastic.
-- **`intl` is compiled, not enabled, on some images.** CiviCRM requires it
-  (*"PHP INTL — required for outputting localized formatted number strings from
-  CiviCRM 5.28 onwards"*), and the platform ships it either as a `.so` waiting to
-  be enabled or not at all. `05-enable-php-ext.sh` handles the first case
-  automatically. If the binary is genuinely absent and the image has no
-  `docker-php-ext-install`, the script stops and tells you; the platform's own
-  remedy is to upload a compiled `intl.so` via **node → Config → etc →
-  php.ini**. See [`ops/README-php-extensions.md`](ops/README-php-extensions.md).
+- **Cron cannot be created from JPS** on Jelastic. `cron` is installed and
+  running in the image, so the only remaining step is the crontab entry itself
+  (Dashboard → CUSTOMER → Cron Jobs, using `ops/crontab`).
 - **`type="module"` in the extension's `info.xml`.** Its own comment says
   *"Since CiviCRM 6.26 every extension must be type=module"*, but 6.26 is a
   **future** release (CiviCRM versions are year-based; 6.26 ≈ 2027). On 6.18.2
