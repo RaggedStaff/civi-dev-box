@@ -88,8 +88,28 @@ discover_root() {
     MYSQL_ROOT_ARGS=()
   fi
 
-  # 2. The platform's own admin account. Jelastic ships a config for phpMyAdmin
-  # and admin-panel access to the database; reuse it rather than reinvent it.
+  # 2. The platform's own environment variable. This is the documented
+  #    mechanism: the DB node exports MYSQL_ROOT_PASSWORD, and because the cp
+  #    node declares `links: [sqldb:DB]`, the platform re-exports it there as
+  #    DB_MYSQL_ROOT_PASSWORD.
+  #
+  #    Checked before any file probing because it is the one this platform
+  #    actually provides - the earlier version of this script never looked here,
+  #    which is why all four of its mechanisms failed.
+  local envvar
+  for envvar in MYSQL_ROOT_PASSWORD DB_MYSQL_ROOT_PASSWORD MARIADB_ROOT_PASSWORD; do
+    eval "val=\${${envvar}:-}"
+    [ -n "$val" ] || continue
+    MYSQL_ROOT_ARGS=(-u root "-p${val}")
+    if try_root; then
+      log "root access: \$${envvar} (set by the platform)"
+      return 0
+    fi
+    MYSQL_ROOT_ARGS=()
+  done
+
+  # 3. The platform's own admin account config. Jelastic ships one for
+  #    phpMyAdmin and admin-panel access; reuse it rather than reinvent it.
   local cnf
   for cnf in /root/.my.cnf /var/lib/jelastic/mysql/my.cnf \
              /etc/mysql/debian.cnf /etc/my.cnf.d/debian.cnf \
@@ -103,7 +123,7 @@ discover_root() {
     MYSQL_ROOT_ARGS=()
   done
 
-  # 3. Passwordless, via the unix socket. Works on a stock MariaDB where root
+  # 4. Passwordless, via the unix socket. Works on a stock MariaDB where root
   #    authenticates as the OS user (auth_socket / unix_socket).
   MYSQL_ROOT_ARGS=(-u root)
   if try_root; then
@@ -111,7 +131,7 @@ discover_root() {
     return 0
   fi
 
-  # 4. Explicitly say to use the socket: -u root alone may still be trying TCP.
+  # 5. Explicitly say to use the socket: -u root alone may still be trying TCP.
   MYSQL_ROOT_ARGS=(-u root --protocol=socket)
   if try_root; then
     log "root access: passwordless via socket (--protocol=socket)"
@@ -125,13 +145,15 @@ discover_root() {
 if ! discover_root; then
   die "cannot authenticate to MariaDB as an administrator.
     Tried, in order:
-      - CIVICRM_MYSQL_ROOT_PASSWORD (not set)
+      - CIVICRM_MYSQL_ROOT_PASSWORD (${CIVICRM_MYSQL_ROOT_PASSWORD:+set but rejected}${CIVICRM_MYSQL_ROOT_PASSWORD:-not set})
+      - \$MYSQL_ROOT_PASSWORD / \$DB_MYSQL_ROOT_PASSWORD / \$MARIADB_ROOT_PASSWORD
+        (the platform exports one of these; check with: env | grep -i root_pass)
       - /root/.my.cnf and the platform's my.cnf locations (none readable, or rejected)
       - passwordless 'mysql -u root' via socket
 
-    The platform sets its own database root password. Find it in the dashboard
-    (Database node > Credentials) and either set CIVICRM_MYSQL_ROOT_PASSWORD on
-    the sqldb node, or run this script by hand:
+    If the environment variables are absent, the platform's root password is in
+    the dashboard under the database node > Credentials. Either set
+    dbRootPass on the sqldb node, or run this by hand:
       CIVICRM_MYSQL_ROOT_PASSWORD='<password>' ./10-db-tune.sh"
 fi
 

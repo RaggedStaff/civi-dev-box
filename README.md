@@ -159,7 +159,45 @@ name; `baseUrl` can be overridden the same way. To get a session token, copy the
 authentication enabled. `make deploy` wraps the curl above if you'd rather not
 type it.
 
-### 3. Deploy the extension
+### 3. Iterating without re-importing
+
+You do **not** have to delete and re-import to try a change. Once an environment
+exists, push the script and run it in place:
+
+```bash
+make provision   # intl -> auth -> preflight -> fetch -> install -> health
+```
+
+That keeps the volumes, the database and any uploaded extension archive. Each
+step is also a target on its own (`make fetch`, `make install`, `make health`,
+`make ext-intl`), so you can re-run just the step you changed.
+
+It needs SSH access to the app node — Dashboard → the node → **SSH**, which gives
+you the `root@…` address to pass as `TARGET`:
+
+```bash
+make provision TARGET=root@node219317-civi-dev
+```
+
+`scripts/ssh-run.sh` does the transfer. It pushes the script **and** `lib.sh` to
+the box, then executes the file. Note that the obvious alternative,
+`ssh host 'bash -s' < script.sh`, does not work: a script read from stdin has no
+`BASH_SOURCE`, so every script's `. lib.sh` line resolves to `/lib.sh`.
+
+The database step is separate, because it runs on the *database* node:
+
+```bash
+make db-tune DB_TARGET=root@node219318-civi-dev-db
+```
+
+**Why re-import anyway.** The JPS hooks only run on install, and the
+`onAfterRestartNode` hook re-runs just the release-code fetch. So `make
+provision` does not cover everything a fresh import does — in particular
+container-level changes that the platform itself applies at creation time. Reuse
+the environment for iterating on scripts; re-import when the *topology* or the
+node configuration changes.
+
+### 4. Deploy the extension
 
 The manifest deliberately does **not** deploy the extension, because
 `dfc_civicrm` has **no git remote** and its `vendor/` + `composer.lock` are
@@ -178,7 +216,7 @@ make ext-verify     # their tools/verify-install.sh, on the box
 `ext-build` delegates to the extension's own scripts. This project does not
 reimplement their gates.
 
-### 4. One manual step JPS cannot do
+### 5. One manual step JPS cannot do
 
 **Cron.** Scheduled mailings, the job queue and reminders all need it. Install
 [`ops/crontab`](ops/crontab) via Dashboard → CUSTOMER → Cron Jobs.
@@ -191,7 +229,7 @@ curl -sI https://dev.civi.sioldata.com/private/civicrm.settings.php   # 403 or 4
 curl -sI https://dev.civi.sioldata.com/core/civicrm/version.php      # 403 or 404
 ```
 
-### 5. Verify
+### 6. Verify
 
 ```bash
 make health         # runtime, layout, DB, extension, cron — one command
@@ -274,6 +312,8 @@ scripts/
   40-install-extension.sh   source-based deploy (git URL or local path)
   45-deploy-archive.sh      archive-based deploy  ← primary for dfc_civicrm
   90-healthcheck.sh         one command: is this box healthy?
+  99-diagnose-web.sh        read-only: what is actually serving the site
+  ssh-run.sh                push a script to the box and run it as a FILE
 ops/
   README-apache.md          why Apache, and what is auto-configured
   crontab                   CiviCRM scheduled jobs

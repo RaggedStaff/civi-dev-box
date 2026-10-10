@@ -101,24 +101,51 @@ ext-status: ## Show the extension's status on the box
 # =============================================================================
 # BOX  (runs on the box)
 # =============================================================================
+# NOTE: every "run a script on the box" target goes through ssh-run.sh, which
+# pushes the script and executes it as a FILE.
+#
+# The obvious alternative - `ssh host 'bash -s' < script.sh` - pipes the script
+# into bash's stdin, and a script read from stdin has no BASH_SOURCE. Every
+# script's `. lib.sh` line then resolves to "/lib.sh" and the run dies with
+# "BASH_SOURCE[0]: unbound variable". That is the same failure that stopped
+# every JPS import until the hooks were changed to download to disk, and it was
+# still sitting in these four targets.
+SSHRUN = CIVICRM_SSH_TARGET=$(TARGET) CIVICRM_SSH_USER=$(SSH_USER) CIVICRM_SSH_KEY=$(SSH_KEY) bash $(SCRIPTS)/ssh-run.sh
+
 .PHONY: preflight
 preflight: ## Verify the PHP runtime against CiviCRM's requirements
-	$(SSH) 'bash -s' < $(SCRIPTS)/00-preflight.sh
+	$(SSHRUN) $(SCRIPTS)/00-preflight.sh
+
+.PHONY: ext-intl
+ext-intl: ## Enable the intl extension (CiviCRM requires it)
+	$(SSHRUN) $(SCRIPTS)/05-enable-php-ext.sh
 
 .PHONY: fetch
 fetch: ## Re-materialise the release code and bind volumes
-	$(SSH) 'bash -s' < $(SCRIPTS)/20-fetch-civicrm.sh
+	$(SSHRUN) $(SCRIPTS)/20-fetch-civicrm.sh
 
 .PHONY: install
 install: ## Run the non-interactive CiviCRM installer (idempotent)
-	$(SSH) 'bash -s -- $(SITE_URL)' < $(SCRIPTS)/30-install-civicrm.sh
+	$(SSHRUN) $(SCRIPTS)/30-install-civicrm.sh
 
 .PHONY: health
 health: ## Full healthcheck: runtime, layout, DB, extension, cron
-	$(SSH) 'bash -s' < $(SCRIPTS)/90-healthcheck.sh
+	$(SSHRUN) $(SCRIPTS)/90-healthcheck.sh
+
+# Re-run provisioning on the EXISTING box, without deleting and re-importing.
+# The fast iteration loop: fix a script, `make provision`, keep the volumes,
+# the database and the uploaded extension archive.
+.PHONY: provision
+provision: ## Re-run all provisioning steps on the existing box (no re-import)
+	$(SSHRUN) $(SCRIPTS)/05-enable-php-ext.sh
+	$(SSHRUN) $(SCRIPTS)/06-disable-default-auth.sh
+	$(SSHRUN) $(SCRIPTS)/00-preflight.sh
+	$(SSHRUN) $(SCRIPTS)/20-fetch-civicrm.sh
+	$(SSHRUN) $(SCRIPTS)/30-install-civicrm.sh
+	$(MAKE) --no-print-directory health
 
 .PHONY: up
-up: preflight fetch install health ## preflight -> fetch -> install -> verify
+up: provision ## alias for provision
 
 .PHONY: push-scripts
 push-scripts: ## Copy the deploy scripts onto the box
@@ -128,6 +155,16 @@ push-scripts: ## Copy the deploy scripts onto the box
 .PHONY: logs
 logs: ## Tail the CiviCRM log
 	$(SSH) 'find $(CIVICRM_DATA_DIR)/private/log -name "*.log" -exec tail -f {} +'
+
+# 10-db-tune.sh runs on the DATABASE node, not the app node, so it needs that
+# node's SSH address. Jelastic shows it on the database node's page; without it
+# the DB step can only be reached by re-importing.
+DB_TARGET ?= $(TARGET)-db
+.PHONY: db-tune
+db-tune: ## Apply the CiviCRM database tuning and create the app user (DB node)
+	@test -n "$(DB_TARGET)" || { echo "Set DB_TARGET to the database node's SSH address"; exit 1; }
+	CIVICRM_SSH_TARGET=$(DB_TARGET) CIVICRM_SSH_USER=$(SSH_USER) CIVICRM_SSH_KEY=$(SSH_KEY) \
+	  bash $(SCRIPTS)/ssh-run.sh $(SCRIPTS)/10-db-tune.sh
 
 .PHONY: db
 db: ## Open a MySQL client on the CiviCRM database
