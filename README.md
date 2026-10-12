@@ -24,6 +24,10 @@ and `tools/verify-install.sh` says:
 **So this project does not reimplement the extension's acceptance tests. It
 provides the box, then runs the ones already written.**
 
+> **To install it, read [Installing on Jelastic](#installing-on-jelastic).** In
+> short: build and push the application image first, point the manifest at it,
+> then import. The image has to exist before the platform can create anything.
+
 ---
 
 ## Pinned stack
@@ -144,95 +148,201 @@ The same scripts therefore work whether run by the manifest or by hand over SSH.
 
 ---
 
-## Deploying
+## Installing on Jelastic
 
-### 1. Build and push the image
+Six steps, in order. **Step 1 must happen before step 4** — the platform cannot
+create the environment until the application image exists in a registry it can
+pull from.
 
-The manifest's app node points at a custom image, so **the image must be
-pullable by the platform before you import**:
+Estimated time: ~4 minutes to build and push the image, ~3 minutes for the
+platform to create the environment.
 
-```bash
-make image-build IMAGE=raggedstaff/civi-dev-box     # or any registry path
-make image-push  IMAGE=raggedstaff/civi-dev-box
-make image-test                                     # boots it, checks it serves
-```
+---
 
-`make image-test` is the local acceptance check: it confirms HTTP 200 on `/` and
-**403 on `/private/civicrm.settings.php`** — the credential leak, closed.
+### 1. Push the application image
 
-If you would rather not publish publicly, add a private registry in the dashboard
-under *Custom templates* and point `appImage` at it.
-
-### 2. Publish these scripts (see the FAQ at the bottom for why)
+The manifest's app node is a **custom Docker image**, not one of the provider's
+certified stacks. Jelastic has to pull it, so it has to exist in Docker Hub (or
+another registry the platform can reach) first.
 
 ```bash
-git remote -v      # push this repo to your org
-# edit jps/civi-standalone.jps:
-#   baseUrl: https://raw.githubusercontent.com/<org>/civi-dev-box/main/
+cd <this repo>
+
+docker login                                    # once, if you have not already
+make image-build IMAGE=<your-dockerhub-user>/civi-dev-box
+make image-push  IMAGE=<your-dockerhub-user>/civi-dev-box
 ```
 
-### 3. Install the environment
+That builds `civicrm/civicrm-base:php8.5` plus the additions this box needs
+(`cron`, `git`, `unzip`, `composer`, and the `private/` deny rules), and pushes it
+as `<your-dockerhub-user>/civi-dev-box:8.5.11`.
 
-There is **no `jps` CLI** — JPS is the *manifest format*, not a command. Two ways
-to install it:
+Check it works before going further:
 
-**Dashboard (recommended).** Log in to `https://app.jpe.infomaniak.com` →
-**Import → Import manifest**, then paste:
+```bash
+make image-test
+```
+
+Expected:
+
+```
+/                              HTTP 200
+/private/civicrm.settings.php  HTTP 403   CORRECT (denied)
+```
+
+That 403 is the important one — it proves the directory holding your database
+credentials is not web-readable.
+
+> **Prefer not to publish publicly?** Add a private registry in the dashboard
+> under *Custom templates*, then use that path for `IMAGE` and for the manifest's
+> `appImage` field.
+
+### 2. Check the manifest points at your image
+
+Open `jps/civi-standalone.jps` and set `appImage` to the tag you just pushed:
+
+```yaml
+- caption: Application image
+  name: appImage
+  default: "raggedstaff/civi-dev-box:8.5.11"    # <-- yours
+```
+
+Then commit and push, because **step 4 fetches the manifest over HTTP** — the
+platform downloads the file from GitHub, it does not use your local copy:
+
+```bash
+git add jps/civi-standalone.jps
+git commit -m "point the manifest at our image"
+git push
+```
+
+### 3. (Optional) Check the database image
+
+The database node is the official `mariadb` image:
+
+```yaml
+- caption: Database image
+  name: dbImage
+  default: "mariadb:12.3"
+```
+
+You do not need to change this. It creates the database and user itself from the
+`MARIADB_*` variables in the manifest, which is why there is no database
+provisioning step to run.
+
+### 4. Import the manifest
+
+Log in to <https://app.jpe.infomaniak.com>, then **Import → Import manifest**, and
+paste:
 
 ```
 https://raw.githubusercontent.com/RaggedStaff/civi-dev-box/main/jps/civi-standalone.jps
 ```
 
-The form exposes every setting field, so `envName`, `siteUrl`, `phpTag`,
-`dbPass` etc. are all editable before you commit to the install.
+The form pre-fills every setting. Check these three and leave the rest alone:
 
-**REST API (scriptable).** The Dashboard's own import action calls:
+| Field | Should be | Why it matters |
+| --- | --- | --- |
+| `appImage` | your image from step 1 | **wrong here and the install fails immediately** |
+| `siteUrl` | `https://dev.civi.sioldata.com` | baked into the install; changing it later means re-installing |
+| `extSource` | *blank* | only for a git-hosted copy of the extension; this box deploys it separately in step 6 |
+
+Then click **Install**. Progress shows under the environment as it goes; the
+`onInstall` hooks fetch the scripts and run them, so do not expect to click
+anything again.
+
+### 5. Add cron (one manual step)
+
+JPS cannot create a cron job, and without one, scheduled mailings, the job queue
+and reminders are all inert. `cron` itself is already installed and running in
+the image — this is just the crontab entry.
+
+**Dashboard → CUSTOMER → Cron Jobs**, using the file at
+[`ops/crontab`](ops/crontab).
+
+### 6. Deploy the extension
+
+The manifest deliberately does **not** deploy the extension. `dfc_civicrm` has no
+git remote and its `vendor/` is gitignored, so there is nothing on the box to
+clone. It ships as the archive its own `tools/build-release.sh` produces.
+
+From your workstation:
+
+```bash
+make ext-build      # runs the extension's own preflight + build-release.sh
+make ext-install    # uploads the archive and runs cv ext:enable
+make ext-verify     # runs the extension's own verify-install.sh, on the box
+```
+
+Each needs `TARGET` set to the app node's SSH address (Dashboard → the node →
+**SSH**):
+
+```bash
+make ext-install TARGET=root@node12345-civi-dev
+```
+
+### 7. Verify
+
+```bash
+make health TARGET=root@node12345-civi-dev
+```
+
+and in a browser: <https://dev.civi.sioldata.com/civicrm/login>.
+
+---
+
+## Installing without the Dashboard
+
+There is **no `jps` CLI** — JPS is the manifest *format*, not a command. The
+Dashboard's own import action calls this REST endpoint:
 
 ```bash
 export JELASTIC_API="https://app.jpe.infomaniak.com/1.0"
 export JPS_URL="https://raw.githubusercontent.com/RaggedStaff/civi-dev-box/main/jps/civi-standalone.jps"
-export JELASTIC_SESSION="..."   # see below
+export JELASTIC_SESSION="..."     # see below
 
 curl -sG "${JELASTIC_API}/environment/control/importmanifest" \
   --data-urlencode "session=${JELASTIC_SESSION}" \
   --data-urlencode "manifestUrl=${JPS_URL}" \
   --data-urlencode "envName=civi-dev" \
   --data-urlencode "siteUrl=https://dev.civi.sioldata.com" \
-  --data-urlencode "phpTag=8.5.11" \
+  --data-urlencode "appImage=<your-dockerhub-user>/civi-dev-box:8.5.11" \
+  --data-urlencode "dbImage=mariadb:12.3" \
   --data-urlencode "demoData=false"
 ```
 
-Every `settings.fields` entry in the manifest is a query parameter of the same
+Every entry in the manifest's `settings.fields` is a query parameter of the same
 name; `baseUrl` can be overridden the same way. To get a session token, copy the
-`session` value out of any Dashboard API request (dev tools → Network), or use
-`POST ${JELASTIC_API}/users/authentication/rest-api` if your provider has REST
-authentication enabled. `make deploy` wraps the curl above if you'd rather not
-type it.
+`session` value out of any Dashboard API request (browser dev tools → Network),
+or use `POST ${JELASTIC_API}/users/authentication/rest-api` if your provider has
+REST authentication enabled. `make deploy` wraps this call.
 
-### 4. Iterating without re-importing
+## Iterating without re-importing
 
 You do **not** have to delete and re-import to try a change. Once an environment
 exists, push the script and run it in place:
 
 ```bash
-make provision   # intl -> auth -> preflight -> fetch -> install -> health
+make provision   # preflight -> fetch -> install -> health
 ```
 
 That keeps the volumes, the database and any uploaded extension archive. Each
-step is also a target on its own (`make fetch`, `make install`, `make health`,
-`make fetch`, `make install`, `make health`), so you can re-run just the step you changed.
+step is also a target on its own (`make fetch`, `make install`, `make health`),
+so you can re-run just the step you changed.
 
 It needs SSH access to the app node — Dashboard → the node → **SSH**, which gives
 you the `root@…` address to pass as `TARGET`:
 
 ```bash
-make provision TARGET=root@node219317-civi-dev
+make provision TARGET=root@node12345-civi-dev
 ```
 
 `scripts/ssh-run.sh` does the transfer. It pushes the script **and** `lib.sh` to
 the box, then executes the file. Note that the obvious alternative,
 `ssh host 'bash -s' < script.sh`, does not work: a script read from stdin has no
-`BASH_SOURCE`, so every script's `. lib.sh` line resolves to `/lib.sh`.
+`BASH_SOURCE`, so every script's `. lib.sh` line resolves to `/lib.sh`. That exact
+bug stopped every import before the manifest was changed to download scripts to
+disk.
 
 There is no database step to run: the official `mariadb` image creates the
 database and user from `MARIADB_DATABASE` / `_USER` / `_PASSWORD` in the manifest.
@@ -242,51 +352,11 @@ To administer it by hand:
 make db-root DB_TARGET=root@<db-node> DB_ROOT_PASS=<dbRootPass>
 ```
 
-**Why re-import anyway.** The JPS hooks only run on install, and the
-`onAfterRestartNode` hook re-runs just the release-code fetch. So `make
-provision` does not cover everything a fresh import does — in particular
-container-level changes that the platform itself applies at creation time. Reuse
-the environment for iterating on scripts; re-import when the *topology* or the
-node configuration changes.
-
-### 5. Deploy the extension
-
-The manifest deliberately does **not** deploy the extension, because
-`dfc_civicrm` has **no git remote** and its `vendor/` + `composer.lock` are
-gitignored — there is nothing on the box to clone, and a clone would be missing
-the `siol-data/dfc-connector` runtime subset that export depends on.
-
-Instead the extension ships as the archive its own `tools/build-release.sh`
-produces:
-
-```bash
-make ext-build      # their tools/preflight + build-release.sh -> build/*.tar.gz
-make ext-install    # scp the archive to the box, extract, cv ext:enable
-make ext-verify     # their tools/verify-install.sh, on the box
-```
-
-`ext-build` delegates to the extension's own scripts. This project does not
-reimplement their gates.
-
-### 6. One manual step JPS cannot do
-
-**Cron.** Scheduled mailings, the job queue and reminders all need it. Install
-[`ops/crontab`](ops/crontab) via Dashboard → CUSTOMER → Cron Jobs.
-
-Web-server config needs nothing: the box runs Apache, which honours the
-`.htaccess` rules the CiviCRM release ships. Confirm it once with:
-
-```bash
-curl -sI https://dev.civi.sioldata.com/private/civicrm.settings.php   # 403 or 404
-curl -sI https://dev.civi.sioldata.com/core/civicrm/version.php      # 403 or 404
-```
-
-### 7. Verify
-
-```bash
-make health         # runtime, layout, DB, extension, cron — one command
-make ext-verify     # the extension's own install/uninstall acceptance test
-```
+**When you still need a re-import.** The JPS hooks only run on install, and
+`onAfterRestartNode` re-runs just the release-code fetch. So `make provision`
+does not cover everything a fresh import does — in particular image changes and
+node configuration. Reuse the environment for iterating on scripts; re-import
+when the image tag, topology or node settings change.
 
 ---
 
@@ -335,15 +405,15 @@ plus `http://localhost` for the version probe. It asserts:
 
 | Symptom | Cause |
 | --- | --- |
-| `cv ext:enable` refuses the extension | `php_compatibility` excludes the running PHP. dfc_civicrm declares 8.1–8.5; the box is 8.5.11. Raising `phpTag` past 8.5 causes exactly this. |
+| `cv ext:enable` refuses the extension | `php_compatibility` excludes the running PHP. dfc_civicrm declares 8.1–8.5; the image is PHP 8.5.11. Rebuilding on a newer PHP than that needs `<ver>` added to the extension's `info.xml` first. |
 | `top-level directory does not match extension key` | The archive's root dir must be `dfc_civicrm/`, because CiviCRM resolves `<ext-dir>/<key>/<file>.php`. |
 | `archive is missing part of the vendored DFC connector subset` | Built with `--no-vendor`. Rebuild with `tools/build-release.sh --force`. |
 | `could not locate a CiviCRM Standalone project root` | `20-fetch-civicrm.sh` has not run, or set `CIVICRM_APP_DIR`. |
 | `not currently supported in a URL subdirectory` | The domain must point at the project root, not a subdirectory. |
-| `ONLY_FULL_GROUP_BY is ON` | MariaDB config did not apply — check `/etc/my.cnf.d/custom.cnf` and that `/etc/my.cnf` includes that directory. |
-| `no civicrm cron entries` | Install `ops/crontab`. |
-| `/private/civicrm.settings.php` is reachable over HTTP | `private/.htaccess` missing or `AllowOverride` too tight. Re-run `make fetch`; if it persists the platform is not allowing `.htaccess` overrides. |
-| `.user.ini` seems ignored | Expected on mod_php — the `.htaccess` `php_value` block covers that case. Check which SAPI is running. |
+| `ONLY_FULL_GROUP_BY is ON` | The stock MariaDB image default. Not yet tuned — see *Known gaps*. |
+| `no civicrm cron entries` | Install `ops/crontab` (Dashboard → CUSTOMER → Cron Jobs). |
+| `/private/civicrm.settings.php` is reachable over HTTP | The image ships the deny rule, so this means the box is **not** running your image. Check `appImage` in the manifest matches what you pushed, and re-import. |
+| Import fails immediately with no script output | Almost always `appImage`: the platform could not pull the image. Check the tag exists and is public. |
 | `the provided path is not a valid directory` from `cv` | ext-dir symlink not in place — `make fetch`. |
 
 ---
@@ -378,15 +448,16 @@ ext-template/               a minimal valid extension, for testing the deploy pa
 
 - **Script hosting.** The manifest fetches scripts from `${baseUrl}`, so the
   repo must be reachable over HTTP. Without a reachable `baseUrl` the
-  environment still creates and you can run the scripts over SSH (`make up`),
+  environment still creates and you can run the scripts over SSH (`make provision`),
   but nothing auto-provisions.
-- **Tags are best-effort.** The Cloud Scripting reference (v8.15.1) still lists
-  only PHP 7.4/8.0/8.1 as engines — stale. Confirm exact tag strings in
-  Dashboard → New Environment, or on `hub.docker.com/r/jelastic/`, and override
-  with `-s phpTag=...`.
-- **`.htaccess` permissions.** If the platform's Apache sets a restrictive
-  `AllowOverride`, `private/.htaccess` will not take effect. Verify with the two
-  `curl` commands in step 4; that is why the check exists.
+- **The image must be pushed before you can import.** The app node is a custom
+  Docker image, so the platform cannot create the environment until that image
+  exists in a registry it can pull from. This is why it is step 1.
+- **`sql_mode` is not tuned yet.** MariaDB 12.3 defaults to `ONLY_FULL_GROUP_BY`,
+  which CiviCRM's requirements page says to turn off. The fix is a `.cnf` in
+  `/etc/mysql/conf.d/`, so it needs either a small DB image or a documented
+  manual step. Not done in this change, and flagged because it is the most likely
+  cause of odd behaviour once the box is up.
 - **The CiviCRM download is not checksum-verified.** CiviCRM publishes no
   `.sha256`/`.md5` sidecar for the Standalone tarball — the sidecar URL redirects
   to a `NoSuchKey` — so there is nothing to fetch automatically and the default
@@ -414,7 +485,7 @@ file. (It must be a *file*: piping into `bash -s` leaves `BASH_SOURCE` unset,
 which breaks every `source lib.sh` line. Jelastic's own app packages use the
 pipe form and hit this too.)
 If you'd rather not publish, skip it: the environment still deploys, and
-`make up` pushes and runs the scripts over SSH instead.
+`make provision` pushes and runs the scripts over SSH instead.
 
 **Why did this used to pin PHP 8.4?**
 Because `dfc_civicrm`'s `php_compatibility` stopped at 8.4, and CiviCRM enforces
