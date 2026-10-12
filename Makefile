@@ -129,6 +129,10 @@ install: ## Run the non-interactive CiviCRM installer (idempotent)
 health: ## Full healthcheck: runtime, layout, DB, extension, cron
 	$(SSHRUN) $(SCRIPTS)/90-healthcheck.sh
 
+.PHONY: why-502
+why-502: ## Find out whether anything is serving, and on which port
+	$(SSHRUN) $(SCRIPTS)/98-why-502.sh
+
 # Re-run provisioning on the EXISTING box, without deleting and re-importing.
 # The fast iteration loop: fix a script, `make provision`, keep the volumes,
 # the database and the uploaded extension archive.
