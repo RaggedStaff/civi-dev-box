@@ -291,14 +291,19 @@ onInstall:
   # --- 0. Fetch the scripts ------------------------------------------------
   # curl || wget, and `|| exit 1`: a silent fetch failure leaves a zero-byte
   # script that fails later with a much more confusing message.
-  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 20-fetch-civicrm.sh 30-install-civicrm.sh 90-healthcheck.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
+  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 00-preflight.sh 20-fetch-civicrm.sh 30-install-civicrm.sh 90-healthcheck.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
 
-  # --- 1. Release code into the document root + bind volumes --------------
+  # --- 1. Fail fast if the runtime does not satisfy CiviCRM --------------
+  # The image verifies this at BUILD time, so this is belt and braces - but it
+  # costs a second and turns an obscure failure later into a clear one here.
+  - cmd [cp]: bash "$HOME/.civi-scripts/00-preflight.sh"
+
+  # --- 2. Release code into the document root + bind volumes --------------
   # The image already provides intl, php.ini, the document root and the
   # private//core/ deny rules, so there is nothing to discover or repair here.
   - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
 
-  # --- 2. Non-interactive install -----------------------------------------
+  # --- 3. Non-interactive install -----------------------------------------
   - cmd [cp]: bash "$HOME/.civi-scripts/30-install-civicrm.sh"
 
 # The app tree is ephemeral, so re-materialise the release code on every restart.

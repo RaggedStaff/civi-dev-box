@@ -244,25 +244,84 @@ resolve_db_host() {
   awk '/[[:space:]]sqldb([[:space:]]|$)/ {print $1; exit}' /etc/hosts 2>/dev/null
 }
 
+# Is a MariaDB error code one that waiting cannot fix?
+#   1045 access denied          - wrong user or password
+#   1044 / 1049 unknown database - MARIADB_DATABASE did not create it
+# Anything in the 2002/2003/2005 range is a connection problem, where waiting IS
+# the right response, because the container may still be initialising.
+db_error_is_terminal() {
+  case "$1" in
+    1045|1044|1049) return 0 ;;
+    *)               return 1 ;;
+  esac
+}
+
+# Wait until the database accepts the credentials CiviCRM will actually use.
+#
+# Probes with the mysql CLIENT, not PDO:
+#   * it is present in the image, so this does not depend on pdo_mysql being
+#     loaded (00-preflight.sh asserts that separately)
+#   * its errors carry an explicit numeric code - "ERROR 1045 (28000): Access
+#     denied..." - which is what lets us tell a wrong password from a container
+#     that is not up yet
+#
+# That distinction matters. An earlier version probed as root with an empty
+# password, which cannot work once MARIADB_ROOT_PASSWORD is set, and reported the
+# single useless line "database did not become reachable after 120s".
 wait_for_db() {
   local host; host="$(resolve_db_host)"
   [ -n "$host" ] || die "cannot determine database host. Set CIVICRM_DB_HOST."
 
-  local tries=60
+  : "${CIVICRM_DB_NAME:=civicrm}"
+  : "${CIVICRM_DB_USER:=civicrm}"
+  : "${CIVICRM_DB_PASS:=}"
+  : "${CIVICRM_DB_PORT:=3306}"
+  [ -n "$CIVICRM_DB_PASS" ] || die "CIVICRM_DB_PASS must be provided to reach the database"
+
+  local cli
+  if   command -v mariadb >/dev/null 2>&1; then cli=mariadb
+  elif command -v mysql   >/dev/null 2>&1; then cli=mysql
+  else die "no mysql/mariadb client on this node; cannot verify the database"
+  fi
+
+  local tries=90        # 90 x 3s = 270s. MariaDB first-boot init is slow.
+  local out code=""
+
   while [ "$tries" -gt 0 ]; do
-    if php -r '
-      $h = getenv("H"); $p = (int) getenv("P");
-      try { $pdo = new PDO("mysql:host=$h;port=$p", "root", "", [PDO::ATTR_TIMEOUT => 3]);
-            exit(0); }
-      catch (Throwable $e) { exit(1); }
-    ' H="$host" P="$CIVICRM_DB_PORT" 2>/dev/null; then
-      log "database reachable at ${host}:${CIVICRM_DB_PORT}"
+    out="$("$cli" --connect-timeout=3 --protocol=TCP               -h "$host" -P "$CIVICRM_DB_PORT"               -u "$CIVICRM_DB_USER" "-p${CIVICRM_DB_PASS}"               -D "$CIVICRM_DB_NAME" -e 'SELECT 1' 2>&1)" && {
+      log "database reachable at ${host}:${CIVICRM_DB_PORT} as ${CIVICRM_DB_USER}"
       return 0
+    }
+
+    code="$(printf '%s' "$out" | sed -n 's/^ERROR \([0-9][0-9]*\).*/\1/p' | head -1)"
+
+    if db_error_is_terminal "$code"; then
+      die "the database at ${host}:${CIVICRM_DB_PORT} refused these credentials:
+    user ${CIVICRM_DB_USER}, database ${CIVICRM_DB_NAME}
+    server said: $(printf '%s' "$out" | head -1)
+
+  Error ${code}. 1045 is access denied; 1044/1049 mean the database is not there.
+
+  The mariadb image creates the user and database from MARIADB_USER /
+  MARIADB_PASSWORD / MARIADB_DATABASE, and ONLY on first start: if the volume at
+  /var/lib/mysql already holds a database, those variables are ignored entirely.
+  Delete the environment (or the volume) and re-import, or use the credentials
+  already present in the volume."
     fi
+
     tries=$((tries - 1))
-    sleep 2
+    if [ $((tries % 15)) -eq 0 ]; then
+      log "still waiting for the database (${tries} attempts left)"
+    fi
+    sleep 3
   done
-  die "database did not become reachable at ${host}:${CIVICRM_DB_PORT} after $((60 * 2))s"
+
+  die "the database at ${host}:${CIVICRM_DB_PORT} did not become reachable after $((90 * 3))s.
+  Last error: $(printf '%s' "${out:-}" | head -1)
+
+  That is a connection problem rather than a credentials one - nothing is
+  listening, or the container is still initialising. Check the database node's
+  status and logs in the dashboard."
 }
 
 # ---------------------------------------------------------------------------
