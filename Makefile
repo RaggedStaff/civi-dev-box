@@ -248,4 +248,16 @@ check-docs: ## Every `make <target>` mentioned in the docs must actually exist
 .PHONY: shellcheck
 shellcheck: ## Lint the shell scripts
 	@command -v shellcheck >/dev/null || { echo "shellcheck not installed"; exit 0; }
-	shellcheck -x $(SCRIPTS)/*.sh
+	@# -P scripts lets shellcheck follow the `. lib.sh` sources. Without it the
+	@# directive looks unresolvable, so it reports SC1091 for every script and
+	@# SC2034 for CIVICRM_APP_DIR, which lib.sh does use.
+	shellcheck -x -P scripts -S warning $(SCRIPTS)/*.sh
+	@echo "  shellcheck clean"
+
+.PHONY: lint-unset
+lint-unset: ## Fail on any variable reference that `set -u` would turn into a fatal error
+	@python3 tests/unset-env-test.py
+
+.PHONY: test
+test: shellcheck lint-unset validate check-docs ## Everything that does not need Docker
+	@echo "  all static checks pass"

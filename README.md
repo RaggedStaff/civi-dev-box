@@ -416,6 +416,7 @@ plus `http://localhost` for the version probe. It asserts:
 | Import fails immediately with no script output | Almost always `appImage`: the platform could not pull the image. Check the tag exists and is public. |
 | `the database ... refused these credentials` | Wrong `dbPass`, or the `/var/lib/mysql` volume already holds a database — in which case the `MARIADB_*` variables were ignored and the old credentials are still in force. Delete the environment or the volume and re-import. |
 | `the database ... did not become reachable` | A connection problem, not a credentials one: nothing is listening, or the container is still initialising. Check the database node's status and logs. |
+| `...: unbound variable` | A script referenced an environment variable the manifest does not set, and `set -u` killed it. `make lint-unset` finds this class of bug before import. |
 | `the provided path is not a valid directory` from `cv` | ext-dir symlink not in place — `make fetch`. |
 
 ---
@@ -441,6 +442,7 @@ ops/
 tests/
   image-test.sh             boots the image, asserts it serves and denies private/
   db-wait-test.sh           wait_for_db against a real MariaDB, all four outcomes
+  unset-env-test.py         fails on any reference `set -u` would turn fatal
   docroot-test.sh           document-root discovery against real httpd -S output
 ext-template/               a minimal valid extension, for testing the deploy path
 ```

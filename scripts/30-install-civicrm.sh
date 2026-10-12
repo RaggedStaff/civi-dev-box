@@ -74,13 +74,19 @@ EXTRA_ARGS=(
   -m "siteKey=${SITE_KEY}"
 )
 
-if [ "${CIVICRM_DEMO_DATA}" = "1" ] || [ "${CIVICRM_DEMO_DATA}" = "true" ]; then
-  log "demo data: ENABLED (install will take considerably longer)"
-  EXTRA_ARGS+=( -m "extras.demoData=yes" )
-else
-  log "demo data: disabled"
-  EXTRA_ARGS+=( -m "extras.demoData=no" )
-fi
+# Demo data is the flag-gated part requested: only added when the setting is
+# truthy. Guarded, since it is optional and a bare reference aborts under `set -u`.
+# Lower-cased, so TRUE/True/Yes are not silently read as "disabled".
+case "${CIVICRM_DEMO_DATA,,}" in
+  1|true|yes|on)
+    log "demo data: ENABLED (install will take considerably longer)"
+    EXTRA_ARGS+=( -m "extras.demoData=yes" )
+    ;;
+  *)
+    log "demo data: disabled"
+    EXTRA_ARGS+=( -m "extras.demoData=no" )
+    ;;
+esac
 
 DB_URL="mysql://${CIVICRM_DB_USER}:${CIVICRM_DB_PASS}@${DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}"
 
@@ -112,7 +118,12 @@ civicrm_installed || die "installer reported success but private/civicrm.setting
 # name to chown to. Prefer an explicit CIVICRM_WEB_USER, then probe the pool
 # config, then fall back to the master process.
 detect_web_user() {
-  if [ -n "$CIVICRM_WEB_USER" ]; then printf '%s' "$CIVICRM_WEB_USER"; return 0; fi
+  # Guarded, because CIVICRM_WEB_USER is an optional override that the JPS does
+  # not set. A bare reference here aborted the install under `set -u` - and it
+  # did so immediately AFTER `cv core:install` had already created the database
+  # tables and written the settings file, which made a successful install look
+  # like a total failure.
+  if [ -n "${CIVICRM_WEB_USER:-}" ]; then printf '%s' "$CIVICRM_WEB_USER"; return 0; fi
 
   # Ask each candidate how it will drop privileges.
   local c
