@@ -105,7 +105,7 @@ settings:
     - caption: Application image
       type: string
       name: appImage
-      default: "raggedstaff/civi-dev-box:8.5.11"
+      default: "sioldata/civi-dev-box:8.5.11"
       hideLabel: false
       description: |
         Built by this repo's Dockerfile. It MUST be pullable by the platform:
@@ -180,7 +180,7 @@ settings:
     - caption: Administrator email
       type: string
       name: adminEmail
-      default: admin@sioldata.com
+      default: hello@fooddatacollaboration.org.uk
       hideLabel: false
 
     - caption: Administrator password
