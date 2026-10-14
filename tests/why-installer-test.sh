@@ -31,8 +31,10 @@ case_run() {
   docker exec "$N" sh -c 'mkdir -p /var/www/html/private /var/www/html/core' >/dev/null 2>&1
   docker exec "$N" sh -c 'printf "<?php echo \"standalone\";" > /var/www/html/civicrm.standalone.php'
   docker exec "$N" sh -c 'printf "<?php\nreturn array(\"civicrm.settings.php\" => 1);\n" > /var/www/html/private/civicrm.settings.php'
-  docker cp "$BOX/scripts/lib.sh"            "$N:/tmp/lib.sh" >/dev/null
+  docker cp "$BOX/scripts/lib.sh"              "$N:/tmp/lib.sh" >/dev/null
   docker cp "$BOX/scripts/97-why-installer.sh" "$N:/tmp/97.sh"  >/dev/null
+  # Ship the parser so the test does not depend on GitHub being reachable.
+  docker cp "$BOX/scripts/read-settings.php"   "$N:/tmp/read-settings.php" >/dev/null
   [ -n "$fault" ] && docker exec "$N" sh -c "$fault" >/dev/null 2>&1
 
   local out

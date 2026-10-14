@@ -221,6 +221,7 @@ image-test: ## Boot the image and check it serves, denies private/, and survives
 	@bash tests/image-test.sh
 	@bash tests/start-web-test.sh
 	@bash tests/why-installer-test.sh
+	@bash tests/read-settings-test.sh
 
 # =============================================================================
 # MANIFEST DEPLOY

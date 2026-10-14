@@ -65,14 +65,34 @@ SHELL_HEREDOC_TAGS = {
     "CRON", "SUDOERS", "HEALTHCHECK", "DOCKERFILE", "HTA",
 }
 
+# ...and tags whose bodies are NOT shell, even though they are named EOF. A
+# test fixture that writes a PHP settings file uses <<'EOF' too, and its
+# $civicrm_setting['db_password'] lines are data, not shell references.
+NONSHELL_HEREDOC_TAGS = {"PHP", "INI", "JSON", "YAML", "XML", "CERT", "CSR"}
+
 HEREDOC = re.compile(r"<<-?\s*(?P<q>['\"]?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)(?P=q)")
-PHP_R = re.compile(r"""php\s+-r\s+'[^']*'""", re.DOTALL)
+# `php -r '...'`, allowing ini flags between the binary and -r, e.g.
+#   php -d display_errors=1 -d error_reporting=E_ALL -r 'require $argv[1];'
+# The flags form was not matched by a plain `php\s+-r`, so the $argv inside was
+# reported as an unguarded shell reference.
+PHP_R = re.compile(r"""php\s+(?:-{1,2}[\w=./'"-]+(?:[ \t]|\\\n)+[^\s'"]*[ \t]+)*(?:\\\n[ \t]*)?-r[ \t]+'[^']*'""", re.DOTALL)
 # `read -r a b c`, `for a b in ...`, `local a b`, `declare a b` bind bare names.
 BARE_BINDING = re.compile(
     r"(?:\bfor\b|\bread\b(?:\s+-[a-zA-Z]+)*|\blocal\b|\bdeclare\b|\btypeset\b|\bexport\b(?:\s+-[a-zA-Z]+)*)"
     r"\s+(?P<names>-[a-zA-Z]+\s+)*"
     r"(?P<ids>[A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)"
 )
+
+
+def blank(seg: str) -> str:
+    """Replace a span with spaces, PRESERVING newlines.
+
+    Replacing newlines with spaces collapses lines together. That looks
+    harmless but is not: line numbers drift, and a heredoc or a php snippet
+    inside the collapsed region is no longer recognised, so real findings and
+    wrong line numbers both appear downstream.
+    """
+    return "".join("\n" if c == "\n" else " " for c in seg)
 
 
 def strip_non_shell(text: str) -> str:
@@ -92,7 +112,7 @@ def strip_non_shell(text: str) -> str:
         # php -r '<code>'  - the PHP is full of $variables that are not ours.
         m = PHP_R.match(text, i)
         if m and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
-            out.append(" " * (m.end() - i))
+            out.append(blank(text[i:m.end()]))
             i = m.end()
             continue
 
@@ -101,20 +121,42 @@ def strip_non_shell(text: str) -> str:
         if m:
             out.append(text[i:m.end()])
             tag = m.group("tag")
-            if tag not in SHELL_HEREDOC_TAGS:
+            if tag not in SHELL_HEREDOC_TAGS or tag in NONSHELL_HEREDOC_TAGS:
                 tm = re.compile(rf"^[ \t]*{re.escape(tag)}[ \t]*$", re.MULTILINE).search(text, m.end())
                 stop = tm.end() if tm else n
-                out.append("\n" + "\n" * text.count("\n", m.end(), stop))
+                out.append(blank(text[m.end():stop]))
                 i = stop
                 continue
             i = m.end()
             continue
 
-        # A comment runs to the end of its own line.
+        # A comment runs to the end of its own line. This MUST come before the
+        # single-quote rule: prose like "Debian's apache2.conf" contains an
+        # apostrophe that is not a quote delimiter, and treating it as one opens
+        # a scan that runs to the next apostrophe anywhere later in the file and
+        # blanks real code in between.
         if ch == "#":
             end = text.find("\n", i)
             end = n if end == -1 else end
-            out.append(" " * (end - i))
+            out.append(blank(text[i:end]))
+            i = end
+            continue
+
+        # A single-quoted string suppresses expansion, so $foo inside one is
+        # literal text, not a reference. Blank the contents. Without this,
+        #   printf '<?php $civicrm_setting[...]' > f
+        # is reported as an unguarded expansion - it cannot fail, because bash
+        # never expands anything inside single quotes.
+        if ch == "'":
+            prev_c = text[i - 1] if i > 0 else ""
+            next_c = text[i + 1] if i + 1 < n else ""
+            if (prev_c.isalnum() or prev_c == "_") and (next_c.isalnum() or next_c == "_"):
+                out.append(ch)
+                i += 1
+                continue
+            end = text.find("'", i + 1)
+            end = n if end == -1 else end + 1
+            out.append(blank(text[i:end]))
             i = end
             continue
 

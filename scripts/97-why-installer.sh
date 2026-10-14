@@ -87,69 +87,160 @@ done
 info "webserver user: ${WEB_USER:-unknown}"
 
 if [ -n "$WEB_USER" ]; then
-  if su -s /bin/sh -c "head -c 1 '$SETTINGS' >/dev/null" "$WEB_USER" 2>/dev/null; then
-    ok "${WEB_USER} can read the settings file"
+  # Check the mode bits directly rather than shelling in as the user. An earlier
+  # version used `su`, and reported "www-data CANNOT read it" for a file that
+  # was -rw-rw-r--, because su failed for an unrelated reason (no login shell).
+  # That sent the reader after a permissions problem that did not exist.
+  MODE="$(stat -c '%A' "$SETTINGS" 2>/dev/null)"
+  OTHERS="${MODE: -1}"
+  GROUP="${MODE: -4:1}"
+  OWNER_R="${MODE:0:1}"
+  OWNER="$(stat -c '%U' "$SETTINGS" 2>/dev/null)"
+
+  if [ "$OWNER" = "$WEB_USER" ] && [ "$OWNER_R" != "-" ]; then
+    ok "${WEB_USER} owns it (${MODE})"
+  elif [ "$GROUP" != "-" ]; then
+    ok "group-readable (${MODE})"
+  elif [ "$OTHERS" != "-" ]; then
+    ok "world-readable (${MODE}) - ${WEB_USER} can read it"
   else
-    bad "${WEB_USER} CANNOT read it. CiviCRM runs as ${WEB_USER}, so it cannot
-    load the settings and silently falls back to the installer.
-    Fix with:  chown ${WEB_USER}:${WEB_USER} '${SETTINGS}'
-    chown -R ${WEB_USER}:${WEB_USER} '${APP_ROOT}/private'
-    chmod 2770 '${APP_ROOT}/private'
-    (no reinstall needed)"
+    bad "${MODE} with owner ${OWNER}: ${WEB_USER} cannot read it.
+    Fix with:  chown -R ${WEB_USER}:${WEB_USER} '${APP_ROOT}/private'
+    chmod -R u+rwX,g+rwX '${APP_ROOT}/private'; chmod 2770 '${APP_ROOT}/private'"
   fi
 else
-  info "could not determine the webserver user; skipping the readability test"
+  info "could not determine the webserver user; check section 6 instead"
 fi
 
 sec "4. what does it point at?"
-php -r '
-$f = $argv[1];
-$s = file_get_contents($f);
-$get = function ($re) use ($s) { return preg_match($re, $s, $m) ? $m[1] : "(not set)"; };
-printf("  cmsBaseUrl : %s\n",   $get("/cmsBaseUrl\s*=\s*.([^\x27\"]+)/"));
-printf("  db server  : %s\n",   $get("/\x27server\x27\s*=>\s*.([^\x27]+)/"));
-printf("  db name    : %s\n",   $get("/\x27database\x27\s*=>\s*.([^\x27]+)/"));
-printf("  db user    : %s\n",   $get("/\x27username\x27\s*=>\s*.([^\x27]+)/"));
-printf("  settingsPath in file  : %s\n", $get("/settingsPath\s*=\s*.([^\x27\"]+)/"));
-' "$SETTINGS" 2>/dev/null | sed 's/^/  /' || info "could not parse the file"
+# Via read-settings.php, which parses $civicrm_setting['k'] = v with the PHP
+# tokenizer. An inline regex reported every value as "(not set)" on a perfectly
+# good file - twice - because the values are arbitrary strings and the quoting
+# did not survive the trip through the shell.
+# The parser is fetched here rather than up front, and failing to get it is not
+# fatal. An earlier version required it before section 1, so a missing parser
+# aborted the whole diagnostic - including the checks that do not need it, like
+# "the settings file does not exist".
+PARSER="$(dirname "${_CIVI_SELF}")/read-settings.php"
+if [ ! -f "$PARSER" ]; then
+  PARSER="/tmp/civi-read-settings.php"
+  BASE="${CIVICRM_SCRIPTS_BASE_URL:-https://raw.githubusercontent.com/RaggedStaff/civi-dev-box/main/scripts}"
+  curl -fsS "${BASE}/read-settings.php" -o "$PARSER" 2>/dev/null \
+    || command -v wget >/dev/null 2>&1 && wget -qO "$PARSER" "${BASE}/read-settings.php" 2>/dev/null \
+    || PARSER=""
+  [ -f "$PARSER" ] || PARSER=""
+fi
 
-SERVED="$(php -r '
-require $argv[1];
-echo defined("CIVICRM_BASE_URL") ? CIVICRM_BASE_URL : "(undefined)";
-' "$SETTINGS" 2>/dev/null || echo "(could not load)")"
-info "loading it in PHP yields base URL: ${SERVED}"
+VALUES=""
+if [ -n "$PARSER" ]; then
+  VALUES="$(php "$PARSER" "$SETTINGS" 2>/dev/null)" || VALUES=""
+fi
+if [ -z "$PARSER" ]; then
+  warn "could not obtain read-settings.php, so sections 4 and 8 are skipped.
+    Fetch it from the repository into the same directory to get them."
+elif [ -z "$VALUES" ] || [ "$VALUES" = "[]" ]; then
+  bad "could not read \$civicrm_setting entries out of the file.
+    If it parses as PHP but yields nothing, it is probably not a CiviCRM
+    settings file, or it is a truncated write."
+else
+  printf '%s\n' "$VALUES" | sed 's/^/  /'
+fi
 
-sec "5. is the database it points at actually there?"
-DB_HOST="$(resolve_db_host)"
-DB_HOST="${DB_HOST:-$(php -r '$s=file_get_contents($argv[1]);
-  if (preg_match("/\x27server\x27\s*=>\s*.\x27([^\x27:]+)/", $s, $m)) echo $m[1];' "$SETTINGS" 2>/dev/null)}"
-DB_USER="$(php -r '$s=file_get_contents($argv[1]);
-  if (preg_match("/\x27username\x27\s*=>\s*.\x27([^\x27]+)/", $s, $m)) echo $m[1];' "$SETTINGS" 2>/dev/null)"
-DB_NAME="$(php -r '$s=file_get_contents($argv[1]);
-  if (preg_match("/\x27database\x27\s*=>\s*.\x27([^\x27]+)/", $s, $m)) echo $m[1];' "$SETTINGS" 2>/dev/null)"
-DB_PASS="${CIVICRM_DB_PASS:-$(php -r '$s=file_get_contents($argv[1]);
-  if (preg_match("/\x27password\x27\s*=>\s*.\x27([^\x27]+)/", $s, $m)) echo $m[1];' "$SETTINGS" 2>/dev/null)}"
+sec "5. can PHP actually EXECUTE the file?"
+# `php -l` only checks syntax. The file may parse and still fatal at runtime on
+# a function or class that the current release code no longer provides - which
+# is exactly what happens when the release is re-fetched over an older install.
+if php -d display_errors=1 -d error_reporting=E_ALL \
+     -r 'require $argv[1]; echo "loaded without error\n";' "$SETTINGS" >/tmp/_se.out 2>/tmp/_se.err; then
+  ok "executed cleanly"
+  sed 's/^/    /' /tmp/_se.out | grep -v '^ *$' || true
+else
+  bad "the file FALS to execute:"
+  sed 's/^/    /' /tmp/_se.err | head -15
+fi
+rm -f /tmp/_se.out /tmp/_se.err
+
+sec "6. is every directory on the path traversable by the webserver user?"
+for d in / /var /var/www /var/www/html "$(dirname "$SETTINGS")"; do
+  [ -d "$d" ] || continue
+  PERM="$(stat -c '%A %U:%G' "$d" 2>/dev/null)"
+  X="$(stat -c '%A' "$d" 2>/dev/null)"
+  case "$X" in
+    ?????x???) ok "${d}  ${PERM}" ;;
+    *) bad "${d}  ${PERM}  <- webserver cannot traverse into this" ;;
+  esac
+done
+
+sec "7. what does Apache actually log when the page is requested?"
+# The most direct evidence available: make the request the browser makes, then
+# read what PHP said. Any fatal error in loading the settings lands here.
+PORT="$(listening_ports | awk '$1==80||$1==8080||$1==8000 {print $1; exit}')"
+if [ -z "$PORT" ]; then
+  bad "nothing is listening on 80/8080/8000 - run 15-start-web.sh first"
+else
+  ERRLOG=""
+  for f in /var/log/apache2/error.log /var/log/httpd/error_log; do [ -f "$f" ] && ERRLOG="$f" && break; done
+
+  : > "${ERRLOG:-/dev/null}" 2>/dev/null || true
+  MARK="$(wc -l < "$ERRLOG" 2>/dev/null || echo 0)"
+  CODE="$(curl -s -o /tmp/_page.html -w '%{http_code}' --max-time 20 "http://127.0.0.1:${PORT}/" 2>/dev/null)"
+  info "GET / returned ${CODE}"
+
+  if [ -n "$ERRLOG" ] && [ -r "$ERRLOG" ]; then
+    TAILN="$(tail -n "+$((MARK + 1))" "$ERRLOG" 2>/dev/null | grep -vE 'resuming normal operations|command line|caught SIGWINCH' | head -15)"
+    if [ -n "$TAILN" ]; then
+      bad "PHP/Apache errors during that request:"
+      printf '%s\n' "$TAILN" | sed 's/^/    /'
+    else
+      ok "no errors logged during that request"
+    fi
+  fi
+
+  if grep -qi 'installer\|CiviCRM Installer' /tmp/_page.html 2>/dev/null; then
+    bad "the response is the installer page"
+  else
+    ok "the response is not the installer page"
+  fi
+  rm -f /tmp/_page.html
+fi
+
+sec "8. is the database it points at actually there?"
+# Read through the same parser rather than a second, independently-broken regex.
+g() { printf '%s' "$VALUES" | php -r '
+  $d = json_decode(stream_get_contents(STDIN), true) ?: [];
+  $v = $d[$argv[1]] ?? "";
+  echo is_string($v) ? $v : "";
+' "$1"; }
+DB_HOST="$(g db_hostname)"; DB_USER="$(g db_username)"
+DB_NAME="$(g database)"; DB_PASS="$(g db_password)"; DB_PORT="$(g db_port)"
+[ -n "$DB_PORT" ] || DB_PORT=3306
 
 info "db: ${DB_USER}@${DB_HOST}/${DB_NAME}"
+[ -n "$DB_HOST" ] || bad "could not read db_hostname out of the settings file"
 
 CLI="$(command -v mariadb || command -v mysql || true)"
 if [ -z "$CLI" ]; then
   info "no mysql client; skipping"
-elif [ -z "$DB_HOST" ]; then
-  bad "could not determine the database host from the settings file"
+elif [ -z "$DB_HOST" ] || [ -z "$DB_USER" ]; then
+  bad "not enough connection detail to test the database"
 else
-  OUT="$("$CLI" --connect-timeout=5 --protocol=TCP -h "$DB_HOST" -P "${CIVICRM_DB_PORT:-3306}" \
-        -u "${DB_USER:-root}" "-p${DB_PASS}" -D "${DB_NAME}" -e 'SELECT COUNT(*) FROM civicrm_menu' 2>&1)"
-  case "$OUT" in
-    *[0-9]*)
-      ok "connected; civicrm_menu has $(printf '%s' "$OUT" | tail -1) rows"
-      N="$("$CLI" --connect-timeout=5 --protocol=TCP -h "$DB_HOST" -P "${CIVICRM_DB_PORT:-3306}" \
-            -u "${DB_USER}" "-p${DB_PASS}" -D "$DB_NAME" \
-            -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name LIKE 'civicrm\_%'" 2>/dev/null | tail -1)"
-      info "civicrm_* tables in ${DB_NAME}: ${N:-?}"
-      ;;
-    *) bad "database not usable: $(printf '%s' "$OUT" | head -1)" ;;
-  esac
+  OUT="$("$CLI" --connect-timeout=5 --protocol=TCP -h "$DB_HOST" -P "$DB_PORT" \
+        -u "$DB_USER" "-p${DB_PASS}" -D "${DB_NAME}" -e 'SELECT 1' 2>&1)"
+  if [ $? -eq 0 ]; then
+    ok "connected to the database as ${DB_USER}"
+    N="$("$CLI" --connect-timeout=5 --protocol=TCP -h "$DB_HOST" -P "$DB_PORT" \
+          -u "$DB_USER" "-p${DB_PASS}" -D "$DB_NAME" \
+          -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name LIKE 'civicrm\_%'" 2>/dev/null | tail -1)"
+    info "civicrm_* tables: ${N:-?}"
+    case "$N" in
+      0|'') bad "the database has NO civicrm_* tables - the install never took,
+    or this settings file points at a different database than the one that did.
+    Delete the settings file and run 'make install'." ;;
+      *) ok "the database has civicrm tables, so it is the right one" ;;
+    esac
+  else
+    bad "cannot connect: $(printf '%s' "$OUT" | head -1)"
+  fi
 fi
 
 sec "verdict"
