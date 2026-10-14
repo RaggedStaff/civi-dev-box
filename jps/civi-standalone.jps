@@ -321,9 +321,17 @@ onInstall:
 # agent is PID 1, not our CMD, so a restart leaves the node with no web server
 # until something starts one.
 onAfterRestartNode [cp]:
-  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 15-start-web.sh 20-fetch-civicrm.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
+  - cmd [cp]: d="$HOME/.civi-scripts"; mkdir -p "$d"; for f in lib.sh 15-start-web.sh 20-fetch-civicrm.sh 30-install-civicrm.sh; do curl -fsS "${baseUrl}scripts/$f" -o "$d/$f" || wget -qO "$d/$f" "${baseUrl}scripts/$f" || exit 1; done
   - cmd [cp]: bash "$HOME/.civi-scripts/15-start-web.sh"
   - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
+
+  # Deliberately NOT omitted just because it ran at install time. The install is
+  # idempotent - it exits immediately when private/civicrm.settings.php is
+  # present - and the one thing a restart or redeploy can lose is the settings
+  # file itself. Leaving this out meant a lost volume silently downgraded the
+  # site to the installer, with HTTP 200 at / and a 404 at /civicrm/login, which
+  # reads like a broken build rather than a missing install step.
+  - cmd [cp]: bash "$HOME/.civi-scripts/30-install-civicrm.sh"
 
 startPage: ${settings.siteUrl}/civicrm/login
 
