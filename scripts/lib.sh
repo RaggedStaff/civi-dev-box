@@ -391,7 +391,28 @@ generate_site_key() {
   printf '%s' "${key:0:40}"
 }
 
+# Is the site genuinely installed?
+#
+# NOT "does the file exist". A CiviCRM release ships a boilerplate
+# private/civicrm.settings.php, so existence was never evidence of anything -
+# and it deadlocked: the guard reported "already installed", the install was
+# skipped forever, and CiviCRM kept showing its installer because the boilerplate
+# carries no database settings. Nothing in the loop could break it.
+#
+# So require the settings that only a real install writes. The header of the
+# boilerplate even says "CiviCRM version 5", which is a good illustration of how
+# little the file's presence says.
 civicrm_installed() {
-  local app_root; app_root="$(detect_app_root)"
-  [ -f "${app_root}/private/civicrm.settings.php" ]
+  local app_root f
+  app_root="$(detect_app_root)"
+  f="${app_root}/private/civicrm.settings.php"
+  [ -f "$f" ] || return 1
+
+  # An assignment of a database-ish key. Anchored on `=` so a mention in the
+  # license header comment cannot satisfy it, and tolerant of spacing and quote
+  # style so it does not depend on the exact formatting of a given release.
+  grep -qE "\\\$civicrm_setting\[[^]]*(dsn|db_hostname|database|db_username)[^]]*\][[:space:]]*=" "$f" \
+    || return 1
+
+  return 0
 }

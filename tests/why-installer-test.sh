@@ -69,5 +69,76 @@ case_run "settings file absent" \
   "rm -f /var/www/html/private/civicrm.settings.php" "does NOT exist"
 
 echo
+echo "=== civicrm_installed(): existence is not installation ==="
+
+# The guard used to be a bare file test, which accepted this and called the site
+# installed. It is what a CiviCRM release ships: a license header and one
+# unrelated setting, no database. That is what deadlocked the install.
+N2="civi-inv-test-$$"
+FIX="$(mktemp -d)"
+
+cat > "$FIX/boiler.php" <<'PHPX'
+<?php
+/*
+ +---------------------------------------------------------------------+
+ | CiviCRM version 5                                                   |
+ | Copyright CiviCRM LLC (c) 2004-2020                                |
+ +---------------------------------------------------------------------+
+ */
+$domain = array(1, 2, 3, 4, 5, 6);
+$civicrm_setting['domain'] = $domain;
+PHPX
+
+cat > "$FIX/real.php" <<'PHPX'
+<?php
+$civicrm_setting['dsn'] = 'mysql:host=db;dbname=civicrm';
+$civicrm_setting['db_hostname'] = 'db';
+$civicrm_setting['database'] = 'civicrm';
+PHPX
+
+cat > "$FIX/comment.php" <<'PHPX'
+<?php
+/* This file mentions dsn and database in passing, but sets neither. */
+$civicrm_setting['domain'] = array(1, 2);
+PHPX
+
+docker rm -f "$N2" >/dev/null 2>&1
+docker run -d --name "$N2" --entrypoint /bin/sleep "$IMG" infinity >/dev/null 2>&1
+sleep 2
+docker exec "$N2" bash -c 'mkdir -p /var/www/html/private && printf "<?php echo 1;" > /var/www/html/civicrm.standalone.php'
+docker cp "$BOX/scripts/lib.sh" "$N2:/tmp/lib.sh" >/dev/null
+
+inv() {  # $1 = fixture to install as the settings file; echoes pass/fail
+  docker cp "$1" "$N2:/var/www/html/private/civicrm.settings.php" >/dev/null
+  if docker exec "$N2" bash -c \
+      'CIVICRM_APP_DIR=/var/www/html . /tmp/lib.sh; civicrm_installed' >/dev/null 2>&1; then
+    echo accepted
+  else
+    echo rejected
+  fi
+}
+
+if [ "$(inv "$FIX/boiler.php")" = "rejected" ]; then
+  pass "boilerplate settings file correctly REJECTED as not-installed"
+else
+  fail "boilerplate settings file accepted - the install would never run again"
+fi
+
+if [ "$(inv "$FIX/real.php")" = "accepted" ]; then
+  pass "a real settings file is accepted"
+else
+  fail "a real settings file was rejected - the installer would re-run forever"
+fi
+
+if [ "$(inv "$FIX/comment.php")" = "rejected" ]; then
+  pass "a comment mentioning a database key is not enough"
+else
+  fail "a comment mentioning a database key was accepted"
+fi
+
+docker rm -f "$N2" >/dev/null 2>&1
+rm -rf "$FIX"
+
+echo
 [ "$FAIL" -eq 0 ] && echo "  why-installer test PASSED" || echo "  why-installer test FAILED"
 exit "$FAIL"

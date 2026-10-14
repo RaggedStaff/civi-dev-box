@@ -92,17 +92,23 @@ if [ -n "$WEB_USER" ]; then
   # was -rw-rw-r--, because su failed for an unrelated reason (no login shell).
   # That sent the reader after a permissions problem that did not exist.
   MODE="$(stat -c '%A' "$SETTINGS" 2>/dev/null)"
-  OTHERS="${MODE: -1}"
-  GROUP="${MODE: -4:1}"
-  OWNER_R="${MODE:0:1}"
+  # Mode string layout: [0]=type, [1..3]=owner rwx, [4..6]=group rwx,
+  # [7..9]=other rwx. Three earlier versions indexed this wrongly and reported
+  # a world-readable -rw-rw-r-- file as unreadable, because they read the
+  # execute bits (6 and 9) and the type character (0) instead of the read bits.
+  OWNER_R="${MODE:1:1}"   # owner read
+  GROUP_R="${MODE:4:1}"   # group read
+  OTHER_R="${MODE:7:1}"   # other read
   OWNER="$(stat -c '%U' "$SETTINGS" 2>/dev/null)"
+  IN_GROUP="$(id -nG "$WEB_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$(stat -c '%G' "$SETTINGS" 2>/dev/null)" && echo yes || echo no)"
 
-  if [ "$OWNER" = "$WEB_USER" ] && [ "$OWNER_R" != "-" ]; then
+  if [ "$OWNER" = "$WEB_USER" ] && [ "$OWNER_R" = "r" ]; then
     ok "${WEB_USER} owns it (${MODE})"
-  elif [ "$GROUP" != "-" ]; then
-    ok "group-readable (${MODE})"
-  elif [ "$OTHERS" != "-" ]; then
-    ok "world-readable (${MODE}) - ${WEB_USER} can read it"
+  elif [ "$IN_GROUP" = "yes" ] && [ "$GROUP_R" = "r" ]; then
+    ok "${WEB_USER} is in the owning group (${MODE})"
+  elif [ "$OTHER_R" = "r" ]; then
+    ok "world-readable (${MODE}) - ${WEB_USER} can read the file itself"
+    info "but reading it also needs to traverse ${APP_ROOT}/private - see section 6."
   else
     bad "${MODE} with owner ${OWNER}: ${WEB_USER} cannot read it.
     Fix with:  chown -R ${WEB_USER}:${WEB_USER} '${APP_ROOT}/private'
