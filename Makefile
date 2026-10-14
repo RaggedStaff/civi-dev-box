@@ -137,6 +137,10 @@ why-502: ## Find out whether anything is serving, and on which port
 start-web: ## Start Apache and cron (the platform replaces the image's CMD)
 	$(SSHRUN) $(SCRIPTS)/15-start-web.sh
 
+.PHONY: why-installer
+why-installer: ## Why is the site showing the installer instead of the login page?
+	$(SSHRUN) $(SCRIPTS)/97-why-installer.sh
+
 # Re-run provisioning on the EXISTING box, without deleting and re-importing.
 # The fast iteration loop: fix a script, `make provision`, keep the volumes,
 # the database and the uploaded extension archive.
@@ -216,6 +220,7 @@ image-push: ## Push the image so the platform can pull it
 image-test: ## Boot the image and check it serves, denies private/, and survives a CMD override
 	@bash tests/image-test.sh
 	@bash tests/start-web-test.sh
+	@bash tests/why-installer-test.sh
 
 # =============================================================================
 # MANIFEST DEPLOY

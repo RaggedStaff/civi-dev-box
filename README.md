@@ -417,6 +417,8 @@ plus `http://localhost` for the version probe. It asserts:
 | `the database ... refused these credentials` | Wrong `dbPass`, or the `/var/lib/mysql` volume already holds a database — in which case the `MARIADB_*` variables were ignored and the old credentials are still in force. Delete the environment or the volume and re-import. |
 | `the database ... did not become reachable` | A connection problem, not a credentials one: nothing is listening, or the container is still initialising. Check the database node's status and logs. |
 | `...: unbound variable` | A script referenced an environment variable the manifest does not set, and `set -u` killed it. `make lint-unset` finds this class of bug before import. |
+| Site shows the **CiviCRM Installer** and `/civicrm/login` is 404 | `30-install-civicrm.sh` only checks that `private/civicrm.settings.php` *exists*; CiviCRM checks it can *load* it. A file that is unreadable by the webserver user, truncated, or has a PHP parse error passes the first test and fails the second. Run `make why-installer TARGET=root@<node>` — it names which. |
+| `make install` says "nothing to do" but the site is broken | The idempotency guard fired. That guard is a file-existence test only; do not trust it as proof the site works. Use `make why-installer`. |
 | Site returns **502** | Usually **Apache is not running at all**. The platform replaces the image's `CMD` with its own container agent, so `civi-foreground` never runs and nothing starts the web server. `apache2 -t` still reports a valid vhost, which makes this look like a config problem. Fix with `make start-web TARGET=root@<node>`; it is now also an install and restart hook. |
 | Browser warns about the certificate on a custom domain | Jelastic is serving its own wildcard (`*.jcloud-ver-jpe.ik-server.com`), which does not cover your domain. Enable Let's Encrypt for the domain in the dashboard — the CNAME alone does not provision a certificate. |
 | `the provided path is not a valid directory` from `cv` | ext-dir symlink not in place — `make fetch`. |
@@ -432,6 +434,7 @@ scripts/
   lib.sh                    shared helpers, path/DB discovery
   00-preflight.sh           fail fast on an unsatisfying runtime
   15-start-web.sh           start Apache + cron; the platform replaces our CMD
+  97-why-installer.sh        site shows the installer but the settings file exists
   20-fetch-civicrm.sh       release code + bind volumes + .user.ini
   30-install-civicrm.sh     cv core:install, idempotent
   40-install-extension.sh   source-based deploy (git URL or local path)
@@ -446,6 +449,7 @@ tests/
   image-test.sh             boots the image, asserts it serves and denies private/
   db-wait-test.sh           wait_for_db against a real MariaDB, all four outcomes
   start-web-test.sh        starts Apache when the platform overrides the image CMD
+  why-installer-test.sh    97-why-installer.sh reaches the right verdict for each cause
   unset-env-test.py         fails on any reference `set -u` would turn fatal
   docroot-test.sh           document-root discovery against real httpd -S output
 ext-template/               a minimal valid extension, for testing the deploy path
