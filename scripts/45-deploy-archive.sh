@@ -4,12 +4,21 @@
 # Deploys a prebuilt extension archive into the site's ext-dir, registers it
 # with cv, and applies its database migrations.
 #
-# This is the primary deploy path for dfc_civicrm, because:
-#   * it has no git remote, so there is nothing to clone
-#   * vendor/ and composer.lock are gitignored, so a clone would be missing the
-#     siol-data/dfc-connector runtime subset that export depends on at runtime
-#   * tools/build-release.sh already subsets vendor/ via an allow-list, so the
-#     archive is the correct deployable unit
+# This takes an ALREADY BUILT archive. To build one on the box from the
+# extension's GitHub repository, use 45-build-from-git.sh, which produces the
+# archive and then calls this script.
+#
+# The original comment here said dfc_civicrm "has no git remote, so there is
+# nothing to clone". That was wrong: the remote is public at
+# https://github.com/Food-Data-Collaboration/dfc-civicrm. The belief came from
+# a local checkout that is really a subdirectory of an unrelated repository, and
+# which also had no vendor/, so it could not have built a release either.
+#
+# What IS true, and is why building from git still needs care:
+#   * vendor/ and composer.lock are gitignored, so a clone needs
+#     `composer install` before tools/build-release.sh will run at all
+#   * tools/build-release.sh subsets vendor/ via an allow-list, so the archive
+#     is the correct deployable unit either way
 #
 # It also exposes what tools/verify-install.sh expects from the box:
 #   cv ext:dir, cv ext:enable, cv ext:disable, cv ext:status, cv sql:query

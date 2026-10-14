@@ -262,11 +262,28 @@ the image — this is just the crontab entry.
 
 ### 6. Deploy the extension
 
-The manifest deliberately does **not** deploy the extension. `dfc_civicrm` has no
-git remote and its `vendor/` is gitignored, so there is nothing on the box to
-clone. It ships as the archive its own `tools/build-release.sh` produces.
+The manifest deliberately does **not** deploy the extension: that needs the
+extension's own `tools/build-release.sh`, and a decision about when to rebuild.
 
-From your workstation:
+`dfc_civicrm` lives at
+**https://github.com/Food-Data-Collaboration/dfc-civicrm**. Earlier versions of
+this README claimed it had no git remote; that was wrong, and the belief came
+from a local checkout that is really a subdirectory of an unrelated repository.
+It ships as the archive `tools/build-release.sh` produces either way — from the
+box, or from your workstation.
+
+**Simplest — build and deploy on the box** (needs outbound access to GitHub and
+Packagist from the node):
+
+```bash
+make ext-git-install TARGET=root@node12345-civi-dev
+```
+
+That clones, runs `composer install` (needed because `vendor/` is gitignored),
+runs the extension's own `tools/build-release.sh`, verifies its `SHA256SUMS`,
+and deploys. `CIVICRM_EXT_BRANCH=... make ext-git-install` to pin a branch.
+
+**Or build on your workstation and upload:**
 
 ```bash
 make ext-build      # runs the extension's own preflight + build-release.sh
@@ -438,6 +455,7 @@ scripts/
   20-fetch-civicrm.sh       release code + bind volumes + .user.ini
   30-install-civicrm.sh     cv core:install, idempotent
   40-install-extension.sh   source-based deploy (git URL or local path)
+  45-build-from-git.sh     clone dfc_civicrm, composer install, build-release, deploy
   45-deploy-archive.sh      archive-based deploy  ← primary for dfc_civicrm
   90-healthcheck.sh         one command: is this box healthy?
   99-diagnose-web.sh        read-only: what is actually serving the site
@@ -450,6 +468,7 @@ tests/
   db-wait-test.sh           wait_for_db against a real MariaDB, all four outcomes
   start-web-test.sh        starts Apache when the platform overrides the image CMD
   why-installer-test.sh    97-why-installer.sh reaches the right verdict for each cause
+  build-from-git-test.sh  clone + build + deploy the extension, inside the image
   unset-env-test.py         fails on any reference `set -u` would turn fatal
   docroot-test.sh           document-root discovery against real httpd -S output
 ext-template/               a minimal valid extension, for testing the deploy path

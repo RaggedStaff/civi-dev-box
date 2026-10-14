@@ -50,6 +50,10 @@ ext-preflight: ## Run the extension's own tools/preflight.sh (no box needed)
 ext-test: ## Run the extension's unit suite
 	cd "$(EXT_DIR)" && ./vendor/bin/phpunit --testsuite unit
 
+.PHONY: ext-git-install
+ext-git-install: ## Clone dfc_civicrm, build the release on the box, and deploy it
+	$(SSHRUN) $(SCRIPTS)/45-build-from-git.sh
+
 .PHONY: ext-build
 ext-build: ## Build the release archive into $(EXT_DIR)/build
 	cd "$(EXT_DIR)" && ./tools/build-release.sh --force
@@ -222,6 +226,7 @@ image-test: ## Boot the image and check it serves, denies private/, and survives
 	@bash tests/start-web-test.sh
 	@bash tests/why-installer-test.sh
 	@bash tests/read-settings-test.sh
+	@bash tests/build-from-git-test.sh
 
 # =============================================================================
 # MANIFEST DEPLOY

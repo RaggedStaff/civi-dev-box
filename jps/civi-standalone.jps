@@ -54,10 +54,11 @@
 #   fetched at install time, so one image serves several CiviCRM versions.
 #
 # WHAT THIS MANIFEST DOES *NOT* DO
-#   It does not deploy the extension. The extension has no git remote and its
-#   vendor/ + composer.lock are gitignored, so there is nothing to fetch here.
-#   It is deployed afterwards as a built archive - see the README and
-#   `make ext-install` / `make ext-verify`.
+#   It does not deploy the extension. Deployment needs the extension's own
+#   tools/build-release.sh, and a decision about when to rebuild, so it stays a
+#   separate step - see the README and `make ext-git-install` / `make ext-verify`.
+#   (An earlier version of this comment claimed the extension has no git remote.
+#   It does: https://github.com/Food-Data-Collaboration/dfc-civicrm)
 # =============================================================================
 type: install
 version: 1.0
