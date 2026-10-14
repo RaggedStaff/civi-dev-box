@@ -16,6 +16,22 @@
 # Read-only. Paste the whole output back.
 set -uo pipefail
 
+# This script is deliberately standalone: it is the one thing you run when
+# nothing else works, so it must not depend on lib.sh being present next to it.
+# listening_ports() is duplicated from lib.sh rather than sourced - see the
+# comment there for why it reads /proc/net/tcp instead of calling ss.
+listening_ports() {
+  local f hex
+  {
+    for f in /proc/net/tcp /proc/net/tcp6; do
+      [ -r "$f" ] || continue
+      awk 'NR > 1 && $4 == "0A" { split($2, a, ":"); print a[2] }' "$f" 2>/dev/null
+    done
+  } | while read -r hex; do
+      printf '%d\n' "$((16#${hex}))" 2>/dev/null
+    done | sort -un
+}
+
 sec() { printf '\n=== %s ===\n' "$*"; }
 ok()  { printf '  [ ok ] %s\n' "$*"; }
 bad() { printf '  [BAD ] %s\n' "$*"; }
@@ -34,17 +50,11 @@ done
 
 # --- 2. What is listening? ---------------------------------------------------
 sec "2. listening TCP ports"
-if command -v ss >/dev/null 2>&1; then
-  LISTEN="$(ss -lnt 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://' | sort -un)"
-elif command -v netstat >/dev/null 2>&1; then
-  LISTEN="$(netstat -lnt 2>/dev/null | awk 'NR>2 {print $4}' | sed 's/.*://' | sort -un)"
-else
-  LISTEN=""
-  # /proc fallback: local_address is hex, state 0A is LISTEN
-  LISTEN="$(cat /proc/net/tcp /proc/net/tcp6 2>/dev/null \
-            | awk 'NR>1 && $4=="0A" {print $2}' | sed 's/.*://' \
-            | while read -r h; do printf '%d\n' "$((16#$h))"; done | sort -un)"
-fi
+# From /proc/net/tcp, NOT `ss`. On this platform `ss -lnt` returns nothing
+# inside the container even when Apache is listening, so a diagnostic built on
+# ss reports "nothing is listening" for a healthy server. This function reads
+# the kernel's own socket table; it cannot fail that way.
+LISTEN="$(listening_ports | tr '\n' ' ')"
 
 if [ -n "$LISTEN" ]; then
   while read -r p; do
@@ -73,14 +83,21 @@ done
 # --- 4. Does the document root actually serve? -------------------------------
 sec "4. does the document root answer?"
 DOCROOT=""
-for d in /var/www/html /var/www/htdocs /var/www/vhosts /home/jorsand/apps/civicrm "$HOME/httpdocs"; do
+for d in /var/www/html /var/www/htdocs /var/www/vhosts "$HOME/httpdocs"; do
   if [ -d "$d" ] && [ -f "$d/civicrm.standalone.php" ]; then DOCROOT="$d"; break; fi
 done
 [ -n "$DOCROOT" ] || DOCROOT="${CIVICRM_APP_DIR:-/var/www/html}"
 info "document root: ${DOCROOT}"
 [ -f "${DOCROOT}/civicrm.standalone.php" ] \
   && ok "civicrm.standalone.php is present" \
-  || bad "civicrm.standalone.php is MISSING - CiviCRM is not deployed here"
+  || bad "civicrm.standalone.php is MISSING - CiviCRM is not deployed here.
+    Run 'make fetch TARGET=<node>' to deploy the release code."
+
+# A diagnostic must not be the thing that breaks. `set -u` plus an unset HOME
+# killed this script one line before the answer on the real box.
+if [ -z "${HOME:-}" ]; then
+  warn "HOME is not set in this environment; some checks are limited"
+fi
 
 # Try every port that is listening, since we do not know which one the platform
 # proxies to. Reporting "it works on 80" is not enough; we need "it works on the

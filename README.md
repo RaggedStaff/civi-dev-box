@@ -417,7 +417,7 @@ plus `http://localhost` for the version probe. It asserts:
 | `the database ... refused these credentials` | Wrong `dbPass`, or the `/var/lib/mysql` volume already holds a database — in which case the `MARIADB_*` variables were ignored and the old credentials are still in force. Delete the environment or the volume and re-import. |
 | `the database ... did not become reachable` | A connection problem, not a credentials one: nothing is listening, or the container is still initialising. Check the database node's status and logs. |
 | `...: unbound variable` | A script referenced an environment variable the manifest does not set, and `set -u` killed it. `make lint-unset` finds this class of bug before import. |
-| Site returns **502** | The platform's frontend is up but nothing is serving behind it. Run `make why-502 TARGET=root@<node>` — it reports whether a web server is alive, what it is listening on, and whether the document root answers. A 502 on a *custom* domain looks identical whether the domain is wrong, SSL is unprovisioned, or the app was never running, so check this first. |
+| Site returns **502** | Usually **Apache is not running at all**. The platform replaces the image's `CMD` with its own container agent, so `civi-foreground` never runs and nothing starts the web server. `apache2 -t` still reports a valid vhost, which makes this look like a config problem. Fix with `make start-web TARGET=root@<node>`; it is now also an install and restart hook. |
 | Browser warns about the certificate on a custom domain | Jelastic is serving its own wildcard (`*.jcloud-ver-jpe.ik-server.com`), which does not cover your domain. Enable Let's Encrypt for the domain in the dashboard — the CNAME alone does not provision a certificate. |
 | `the provided path is not a valid directory` from `cv` | ext-dir symlink not in place — `make fetch`. |
 
@@ -431,6 +431,7 @@ jps/civi-standalone.jps     the install image — import this
 scripts/
   lib.sh                    shared helpers, path/DB discovery
   00-preflight.sh           fail fast on an unsatisfying runtime
+  15-start-web.sh           start Apache + cron; the platform replaces our CMD
   20-fetch-civicrm.sh       release code + bind volumes + .user.ini
   30-install-civicrm.sh     cv core:install, idempotent
   40-install-extension.sh   source-based deploy (git URL or local path)
@@ -444,6 +445,7 @@ ops/
 tests/
   image-test.sh             boots the image, asserts it serves and denies private/
   db-wait-test.sh           wait_for_db against a real MariaDB, all four outcomes
+  start-web-test.sh        starts Apache when the platform overrides the image CMD
   unset-env-test.py         fails on any reference `set -u` would turn fatal
   docroot-test.sh           document-root discovery against real httpd -S output
 ext-template/               a minimal valid extension, for testing the deploy path

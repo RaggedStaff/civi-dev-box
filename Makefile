@@ -133,12 +133,17 @@ health: ## Full healthcheck: runtime, layout, DB, extension, cron
 why-502: ## Find out whether anything is serving, and on which port
 	$(SSHRUN) $(SCRIPTS)/98-why-502.sh
 
+.PHONY: start-web
+start-web: ## Start Apache and cron (the platform replaces the image's CMD)
+	$(SSHRUN) $(SCRIPTS)/15-start-web.sh
+
 # Re-run provisioning on the EXISTING box, without deleting and re-importing.
 # The fast iteration loop: fix a script, `make provision`, keep the volumes,
 # the database and the uploaded extension archive.
 .PHONY: provision
 provision: ## Re-run all provisioning steps on the existing box (no re-import)
 	$(SSHRUN) $(SCRIPTS)/00-preflight.sh
+	$(SSHRUN) $(SCRIPTS)/15-start-web.sh
 	$(SSHRUN) $(SCRIPTS)/20-fetch-civicrm.sh
 	$(SSHRUN) $(SCRIPTS)/30-install-civicrm.sh
 	$(MAKE) --no-print-directory health
@@ -208,8 +213,9 @@ image-push: ## Push the image so the platform can pull it
 	@echo "  now import the manifest - its appImage field defaults to this."
 
 .PHONY: image-test
-image-test: ## Boot the image locally and check it serves and denies private/
+image-test: ## Boot the image and check it serves, denies private/, and survives a CMD override
 	@bash tests/image-test.sh
+	@bash tests/start-web-test.sh
 
 # =============================================================================
 # MANIFEST DEPLOY

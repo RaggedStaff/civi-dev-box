@@ -41,6 +41,35 @@ DOWNLOAD_BASE="${DOWNLOAD_BASE:-https://download.civicrm.org}"
 CV_URL="${CV_URL:-https://download.civicrm.org/cv/cv.phar}"
 
 # ---------------------------------------------------------------------------
+# listening_ports
+#
+# Print every TCP port in LISTEN state, one per line, numerically sorted.
+#
+# Reads /proc/net/tcp rather than shelling out to ss, and that is not a
+# preference. On this platform `ss -lnt` returns NOTHING inside the container
+# even while Apache is demonstrably listening: /proc/net/tcp showed
+# 00000000:0050 in state 0A while ss reported an empty table. A diagnostic that
+# trusts ss therefore reports "nothing is listening" for a perfectly healthy
+# server - and, because `ss -lnt` also exits 0 on empty output, piping it into
+# a test does not even fail, it just quietly gives the wrong answer.
+#
+# /proc/net/tcp is the kernel's own socket table, so it cannot be wrong in the
+# same way. Port 0050 hex is 80; state 0A is LISTEN.
+# ---------------------------------------------------------------------------
+listening_ports() {
+  local f hex
+  {
+    for f in /proc/net/tcp /proc/net/tcp6; do
+      [ -r "$f" ] || continue
+      awk 'NR > 1 && $4 == "0A" { split($2, a, ":"); print a[2] }' "$f" 2>/dev/null
+    done
+  } | while read -r hex; do
+      # shellcheck disable=SC2050
+      printf '%d\n' "$((16#${hex}))" 2>/dev/null
+    done | sort -un
+}
+
+# ---------------------------------------------------------------------------
 # Filesystem layout
 #
 # The three writable trees (private/, public/, ext/) live on Jelastic volumes
