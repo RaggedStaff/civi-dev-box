@@ -140,35 +140,61 @@ if [ -z "$PARSER" ]; then
     Fetch it from the repository into the same directory to get them."
 elif [ -z "$VALUES" ] || [ "$VALUES" = "[]" ]; then
   bad "could not read \$civicrm_setting entries out of the file.
-    If it parses as PHP but yields nothing, it is probably not a CiviCRM
-    settings file, or it is a truncated write."
+    The first lines are printed below - they usually show what it actually is."
 else
   printf '%s\n' "$VALUES" | sed 's/^/  /'
 fi
+info "first 12 lines of the settings file:"
+head -12 "$SETTINGS" 2>/dev/null | sed 's/^/  | /' 
 
 sec "5. can PHP actually EXECUTE the file?"
 # `php -l` only checks syntax. The file may parse and still fatal at runtime on
 # a function or class that the current release code no longer provides - which
 # is exactly what happens when the release is re-fetched over an older install.
+# Load it in a SUBPROCESS. This file is PHP we do not control: it may call
+# die(), print to stdout, or need CiviCRM's bootstrap. Required inline, a single
+# die() takes this diagnostic down with it and prints nothing - which reads
+# exactly like a file that is fine. So run it separately and report what
+# happened, including "exited non-zero", which is itself a real answer.
 if php -d display_errors=1 -d error_reporting=E_ALL \
      -r 'require $argv[1]; echo "loaded without error\n";' "$SETTINGS" >/tmp/_se.out 2>/tmp/_se.err; then
-  ok "executed cleanly"
+  ok "loaded without error"
   sed 's/^/    /' /tmp/_se.out | grep -v '^ *$' || true
-else
-  bad "the file FALS to execute:"
+elif grep -qiE 'fatal|uncaught|parse error' /tmp/_se.err 2>/dev/null; then
+  bad "it FATALS when loaded - this is why CiviCRM falls back to the installer:"
   sed 's/^/    /' /tmp/_se.err | head -15
+else
+  info "loaded but exited non-zero with no PHP diagnostic (it probably calls"
+  info "exit()/die(), which is normal for a file expecting CiviCRM's bootstrap):"
+  sed 's/^/    /' /tmp/_se.err 2>/dev/null | head -8
 fi
 rm -f /tmp/_se.out /tmp/_se.err
 
 sec "6. is every directory on the path traversable by the webserver user?"
+# -L so a symlinked directory is judged by its TARGET. Without it, private/ -
+# a symlink to the data volume here - came back as lrwxrwxrwx and was called
+# untraversable, which is nonsense.
+#
+# The bit that matters is group-x or other-x: a directory is traversable by a
+# user who is neither its owner nor in its group. Testing only the group bit
+# reported drwxr-xr-x - readable and traversable by everyone - as blocked.
 for d in / /var /var/www /var/www/html "$(dirname "$SETTINGS")"; do
-  [ -d "$d" ] || continue
-  PERM="$(stat -c '%A %U:%G' "$d" 2>/dev/null)"
-  X="$(stat -c '%A' "$d" 2>/dev/null)"
-  case "$X" in
-    ?????x???) ok "${d}  ${PERM}" ;;
-    *) bad "${d}  ${PERM}  <- webserver cannot traverse into this" ;;
-  esac
+  [ -e "$d" ] || continue
+  X="$(stat -L -c '%A' "$d" 2>/dev/null)"
+  PERM="$(stat -L -c '%A %U:%G' "$d" 2>/dev/null)"
+  LINK=""
+  [ -L "$d" ] && LINK=" -> $(readlink "$d")"
+  # Mode string layout: [0]=type, [1..3]=owner, [4..6]=group, [7..9]=other.
+  # So drwxr-xr-x is d|rwx|r-x|r-x: group execute is index 6, other is index 9.
+  GX="${X:6:1}"   # group execute
+  OX="${X:9:1}"   # other execute
+  if [ -z "$X" ]; then
+    info "${d}  (cannot stat)"
+  elif [ "$GX" = "x" ] || [ "$OX" = "x" ]; then
+    ok "${d}  ${PERM}${LINK}"
+  else
+    bad "${d}  ${PERM}${LINK}  <- no group/other execute bit"
+  fi
 done
 
 sec "7. what does Apache actually log when the page is requested?"
@@ -181,13 +207,13 @@ else
   ERRLOG=""
   for f in /var/log/apache2/error.log /var/log/httpd/error_log; do [ -f "$f" ] && ERRLOG="$f" && break; done
 
-  : > "${ERRLOG:-/dev/null}" 2>/dev/null || true
-  MARK="$(wc -l < "$ERRLOG" 2>/dev/null || echo 0)"
+  EL="${ERRLOG:-/dev/null}"
+  MARK="$(wc -l < "$EL" 2>/dev/null || echo 0)"
   CODE="$(curl -s -o /tmp/_page.html -w '%{http_code}' --max-time 20 "http://127.0.0.1:${PORT}/" 2>/dev/null)"
   info "GET / returned ${CODE}"
 
   if [ -n "$ERRLOG" ] && [ -r "$ERRLOG" ]; then
-    TAILN="$(tail -n "+$((MARK + 1))" "$ERRLOG" 2>/dev/null | grep -vE 'resuming normal operations|command line|caught SIGWINCH' | head -15)"
+    TAILN="$(tail -n "+$((MARK + 1))" "$EL" 2>/dev/null | grep -vE 'resuming normal operations|command line|caught SIGWINCH' | head -15)"
     if [ -n "$TAILN" ]; then
       bad "PHP/Apache errors during that request:"
       printf '%s\n' "$TAILN" | sed 's/^/    /'

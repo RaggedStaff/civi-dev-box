@@ -18,9 +18,15 @@ fail() { printf '  [FAIL] %s\n' "$*"; FAIL=1; }
 command -v php >/dev/null 2>&1 || { echo "  php not available; skipping"; exit 0; }
 
 get() { php "$PARSER" "$1" 2>/dev/null | php -r '
-  $d = json_decode(stream_get_contents(STDIN), true) ?: [];
-  echo $d[$argv[1]] ?? "(absent)";
+  $r = json_decode(stream_get_contents(STDIN), true) ?: [];
+  $s = $r["settings"] ?? $r["summary"] ?? [];
+  echo $s[$argv[1]] ?? "(absent)";
 ' "$2"; }
+
+strategy() { php "$PARSER" "$1" 2>/dev/null | php -r '
+  $r = json_decode(stream_get_contents(STDIN), true) ?: [];
+  echo $r["strategy"] ?? "(none)";
+'; }
 
 echo "=== read-settings.php ==="
 
@@ -84,9 +90,9 @@ cat > "$T/array.php" <<'PHP'
 $civicrm_setting['some_array'] = ['a' => 1, 'b' => 2];
 $civicrm_setting['database'] = 'civicrm';
 PHP
-if [ "$(get "$T/array.php" some_array)" = "(not a scalar)" ] \
+if [ "$(get "$T/array.php" some_array)" = "(array of 2)" ] \
    && [ "$(get "$T/array.php" database)" = "civicrm" ]; then
-  pass "array value reported as non-scalar without losing later keys"
+  pass "array value described without losing later keys"
 else
   fail "array handling wrong"
 fi
@@ -108,6 +114,42 @@ if [ "$(get "$T/plain.php" db_hostname)" = "(absent)" ]; then
   pass "non-settings PHP yields absent keys, not garbage"
 else
   fail "non-settings PHP produced a value"
+fi
+
+
+# The require-first strategy: a file that assigns $civicrm_setting as a whole
+# array, which no amount of regex or token-shape matching will find. This is the
+# shape a "could not read it" report most likely means when the file is fine.
+cat > "$T/arrayassign.php" <<'PHP'
+<?php
+$civicrm_setting = [
+  'civicrm.base_url' => 'https://dev.civi.sioldata.com',
+  'db_hostname' => '10.101.4.238',
+  'db_username' => 'civicrm',
+  'database' => 'civicrm',
+];
+PHP
+if [ "$(strategy "$T/arrayassign.php")" = "load" ] \
+   && [ "$(get "$T/arrayassign.php" db_hostname)" = "10.101.4.238" ]; then
+  pass "whole-array assignment found by requiring the file"
+else
+  fail "array-assignment form not found (strategy=$(strategy "$T/arrayassign.php"))"
+fi
+
+# A file that needs CiviCRM's bootstrap cannot be required; the tokenizer must
+# still recover the values rather than reporting nothing.
+cat > "$T/needsbootstrap.php" <<'PHP'
+<?php
+if (!defined('CIVICRM_BASE_URL')) {
+    die("needs bootstrap\n");
+}
+$civicrm_setting['db_hostname'] = 'never.reached';
+PHP
+got="$(get "$T/needsbootstrap.php" db_hostname)"
+if [ "$(strategy "$T/needsbootstrap.php")" = "token" ]; then
+  pass "unrequireable file falls back to tokenising (strategy=token)"
+else
+  fail "expected the token fallback, got strategy=$(strategy "$T/needsbootstrap.php")"
 fi
 
 echo
