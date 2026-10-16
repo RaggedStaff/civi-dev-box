@@ -102,6 +102,28 @@ cat > "$FIX/comment.php" <<'PHPX'
 $civicrm_setting['domain'] = array(1, 2);
 PHPX
 
+# Real settings files are large and their formatting varies by release. The two
+# below differ from $FIX/real.php only in style - which is exactly what defeated
+# the earlier source-pattern greps, so both must be accepted.
+cat > "$FIX/real-doublequoted.php" <<'PHPX'
+<?php
+$civicrm_setting["dsn"]="mysql:host=db;port=3306;dbname=civicrm";
+$civicrm_setting["db_username"]="civicrm";
+$civicrm_setting["database"]="civicrm";
+$civicrm_setting["siteKey"]="abc";
+PHPX
+
+cat > "$FIX/real-spaced.php" <<'PHPX'
+<?php
+
+$civicrm_setting[ 'dsn' ] = 'mysql:host=db;dbname=civicrm';
+
+$civicrm_setting[ 'db_hostname' ] = 'db';
+
+$civicrm_setting[ 'database' ] = 'civicrm';
+
+PHPX
+
 docker rm -f "$N2" >/dev/null 2>&1
 docker run -d --name "$N2" --entrypoint /bin/sleep "$IMG" infinity >/dev/null 2>&1
 sleep 2
@@ -128,6 +150,18 @@ if [ "$(inv "$FIX/real.php")" = "accepted" ]; then
   pass "a real settings file is accepted"
 else
   fail "a real settings file was rejected - the installer would re-run forever"
+fi
+
+if [ "$(inv "$FIX/real-doublequoted.php")" = "accepted" ]; then
+  pass "double-quoted settings keys are accepted"
+else
+  fail "double-quoted settings keys were rejected"
+fi
+
+if [ "$(inv "$FIX/real-spaced.php")" = "accepted" ]; then
+  pass "spaced / padded settings keys are accepted"
+else
+  fail "spaced settings keys were rejected - formatting must not matter"
 fi
 
 if [ "$(inv "$FIX/comment.php")" = "rejected" ]; then

@@ -403,16 +403,37 @@ generate_site_key() {
 # boilerplate even says "CiviCRM version 5", which is a good illustration of how
 # little the file's presence says.
 civicrm_installed() {
-  local app_root f
+  local app_root f n
   app_root="$(detect_app_root)"
   f="${app_root}/private/civicrm.settings.php"
   [ -f "$f" ] || return 1
 
-  # An assignment of a database-ish key. Anchored on `=` so a mention in the
-  # license header comment cannot satisfy it, and tolerant of spacing and quote
-  # style so it does not depend on the exact formatting of a given release.
-  grep -qE "\\\$civicrm_setting\[[^]]*(dsn|db_hostname|database|db_username)[^]]*\][[:space:]]*=" "$f" \
-    || return 1
+  # LOAD the file and count what it defined, rather than pattern-matching its
+  # source. Two earlier attempts grepped for $civicrm_setting['dsn'] and similar
+  # and both were wrong: a genuine settings file from a release whose formatting
+  # differs matched neither, so a completed install was reported as "missing".
+  # Loading it is format-agnostic and is exactly what CiviCRM does.
+  #
+  # Run out-of-process: this file is PHP we do not control, and one die() taken
+  # inline would abort the caller.
+  n="$(php -r '
+    $f = $argv[1];
+    $tmp = @tempnam(sys_get_temp_dir(), "ci");
+    if (!$tmp) { exit(1); }
+    $child = "require \$argv[1]; \$d = null;"
+           . " foreach ([\"civicrm_setting\",\"civicrm_config\",\"settings\"] as \$n) {"
+           . "   if (isset(\$\$n) && is_array(\$\$n)) { \$d = \$\$n; break; } }"
+           . " file_put_contents(\$argv[2], json_encode(\$d));";
+    exec(escapeshellarg(PHP_BINARY) . " -d display_errors=0 -d error_reporting=0 -r "
+        . escapeshellarg($child) . " " . escapeshellarg($f) . " " . escapeshellarg($tmp) . " 2>/dev/null");
+    $d = json_decode(@file_get_contents($tmp), true);
+    @unlink($tmp);
+    if (!is_array($d)) { exit(1); }
+    echo count($d);
+  ' "$f" 2>/dev/null)" || return 1
 
-  return 0
+  # A real install writes dozens of settings. The release boilerplate writes one
+  # unrelated one. The threshold is deliberately low and the count is printed by
+  # the caller so a near-miss is visible rather than silent.
+  [ "${n:-0}" -ge 3 ]
 }

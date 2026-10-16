@@ -109,7 +109,20 @@ if [ "$STATUS" -ne 0 ]; then
 fi
 
 # --- Verify ----------------------------------------------------------------
-civicrm_installed || die "installer reported success but private/civicrm.settings.php is missing"
+# Report which of two very different things went wrong. "missing" and "present
+# but not a configuration this guard recognises" were previously reported with
+# the same words, and only the second was ever true - the installer had just
+# written the file.
+if [ ! -f "$(detect_app_root)/private/civicrm.settings.php" ]; then
+  die "installer reported success but $(detect_app_root)/private/civicrm.settings.php does not exist"
+fi
+civicrm_installed || die "installer reported success, and the settings file exists,
+  but it does not look like an installed configuration.
+  Check what it contains:  head -40 $(detect_app_root)/private/civicrm.settings.php
+  A real install defines dozens of \$civicrm_setting entries; the release
+  boilerplate defines one. cv core:install also prints \"settingsPath\" in its
+  JSON output - if that is not $(detect_app_root)/private/civicrm.settings.php,
+  the installer wrote somewhere else."
 
 # Rewrite ownership so the webserver user can write the three trees.
 #
