@@ -229,6 +229,89 @@ link_data_dirs() {
 }
 
 # ---------------------------------------------------------------------------
+# htaccess_set_block FILE BEGIN END CONTENT_FILE
+#
+# Set CONTENT_FILE as a delimited block inside FILE, leaving every other line
+# untouched.
+#
+# Why this exists
+# ---------------
+# An .htaccess file has more than one author. CiviCRM Standalone is a
+# front-controller app: /civicrm/login is not a path on disk, it is rewritten to
+# civicrm.standalone.php, and the rewrite rules that do that are shipped in the
+# release's own .htaccess. This box adds php_value directives on top.
+#
+# The previous version wrote the whole file to add its part:
+#
+#     cat > "${APP_ROOT}/.htaccess" <<HTA
+#     # Managed by civi-dev-box
+#     ${PHP_VALUE_BLOCK}
+#     HTA
+#
+# which discarded the release's rewrite rules on the very first run, and on every
+# run after that. The symptom was specific, and read as a broken install rather
+# than as a routing fault:
+#
+#     /                         200   index.php, a real file, needs no rewrite
+#     /civicrm.standalone.php   200   also a real file
+#     /civicrm/login            404   exists ONLY as a rewrite - gone
+#
+# The installer had succeeded; the front controller could simply never be
+# reached. Nothing in the error messages pointed at the file that caused it.
+#
+# So add our directives to whatever is already there, between markers, and
+# replace our own block if it is already present. Idempotent, because this runs
+# on every container start: a plain append would stack a duplicate block each
+# time, and while a repeated php_value is harmless, a repeated RewriteRule is
+# not something to rely on.
+# ---------------------------------------------------------------------------
+htaccess_set_block() {
+  local file="$1" begin="$2" end="$3" content_file="$4"
+  local tmp out mode
+  tmp="$(mktemp)"  || return 1
+  out="$(mktemp)"  || { rm -f "$tmp"; return 1; }
+
+  # Capture the existing mode BEFORE overwriting. Default to 0644 for a new file.
+  # This is not cosmetic: mktemp creates 0600, and an .htaccess that Apache runs
+  # as www-data cannot read produces 403 Forbidden for EVERY request in the
+  # directory - with no mention of permissions in the error. That is also the
+  # exact symptom a lost rewrite rule produces, so getting it wrong here
+  # reintroduces the same bug under a different name.
+  mode="$(stat -c '%a' "$file" 2>/dev/null || printf '644')"
+
+  if [ -f "$file" ] && grep -qF "$begin" "$file"; then
+    # Replace only our previous block. sed reads the file and writes elsewhere,
+    # because redirecting over the file we are reading truncates it first.
+    sed "/^${begin}\$/,/^${end}\$/d" "$file" > "$tmp"
+  elif [ -f "$file" ]; then
+    cat "$file" > "$tmp"
+  else
+    : > "$tmp"
+  fi
+
+  # Collapse trailing blank lines, so replacing a longer block with a shorter
+  # one cannot leave the file growing by a blank line on every start.
+  awk '
+    { line[NR] = $0 }
+    END {
+      while (NR > 0 && line[NR] ~ /^[[:space:]]*$/) NR--
+      for (i = 1; i <= NR; i++) print line[i]
+    }' "$tmp" > "$out"
+
+  if [ -s "$out" ]; then
+    printf '\n' >> "$out"
+  fi
+  printf '%s\n' "$begin"  >> "$out"
+  cat "$content_file"      >> "$out"
+  printf '%s\n' "$end"    >> "$out"
+
+  mv "$out" "$file" || { rm -f "$tmp" "$out"; return 1; }
+  chmod "$mode" "$file" 2>/dev/null || true
+  rm -f "$tmp"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # PHP checks
 # ---------------------------------------------------------------------------
 

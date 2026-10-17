@@ -124,16 +124,21 @@ INI
 log "wrote ${APP_ROOT}/.user.ini"
 
 # --- .htaccess -------------------------------------------------------------
-# Two jobs:
-#   1. mod_php equivalent of the ini settings above (php_value)
-#   2. deny direct web access to private/ - which is how CiviCRM itself expects
-#      to be protected. Apache honours this; NGINX would need a hand-written vhost.
+# ONE job: add the mod_php equivalents of the ini settings above.
+#
+# It used to have a second, implicit job - owning the whole file - and that
+# removed CiviCRM's routing. See htaccess_set_block in lib.sh: overwriting
+# .htaccess discards the release's rewrite rules, after which /civicrm/login
+# returns 404 while / and /civicrm.standalone.php keep returning 200, because
+# those are real files that need no rewrite. So this merges a marked block and
+# leaves the release's own lines alone.
+#
 # mod_php honours PHP_INI_PERDIR settings from .htaccess. Only the directives
 # below are legal there - php_value on a PHP_INI_SYSTEM directive such as
 # opcache.revalidate_freq makes Apache return 500 on every request, and the
 # AllowOverride the platform sets may not even permit the whole set.
 #
-# Guarded by IfModule so this file is inert on PHP-FPM, where php_value is not
+# Guarded by IfModule so the block is inert on PHP-FPM, where php_value is not
 # permitted and .user.ini above does the job instead.
 PHP_VALUE_BLOCK=""
 for kv in "memory_limit 512M" \
@@ -149,11 +154,29 @@ for kv in "memory_limit 512M" \
 </IfModule>"
 done
 
-cat > "${APP_ROOT}/.htaccess" <<HTA
-# Managed by civi-dev-box
-${PHP_VALUE_BLOCK}
-HTA
-log "wrote ${APP_ROOT}/.htaccess (mod_php ini equivalents)"
+HTA_BLOCK="$(mktemp)" || die "cannot create a temporary file for the .htaccess block"
+trap 'rm -rf "$TMP" "$HTA_BLOCK"' EXIT
+printf '%s\n' "${PHP_VALUE_BLOCK}" > "$HTA_BLOCK"
+
+HTA_BEGIN="# BEGIN civi-dev-box - mod_php ini settings"
+HTA_END="# END civi-dev-box - mod_php ini settings"
+
+HAD_RELEASE_HTACCESS=0
+[ -f "${APP_ROOT}/.htaccess" ] && HAD_RELEASE_HTACCESS=1
+
+htaccess_set_block "${APP_ROOT}/.htaccess" "$HTA_BEGIN" "$HTA_END" "$HTA_BLOCK" \
+  || die "could not update ${APP_ROOT}/.htaccess"
+
+# Say what we found, because a missing rewrite block is the thing most worth
+# knowing about and it is invisible from a normal request to "/".
+if [ "$HAD_RELEASE_HTACCESS" -eq 1 ] \
+   && ! grep -qiE '^[[:space:]]*RewriteRule' "${APP_ROOT}/.htaccess"; then
+  warn "${APP_ROOT}/.htaccess contains no RewriteRule."
+  warn "CiviCRM Standalone routes /civicrm/* through civicrm.standalone.php by"
+  warn "rewriting; without that, /civicrm/login answers 404 while / answers 200."
+  warn "Restore the .htaccess shipped in the release tarball if one was lost."
+fi
+log "merged civi-dev-box block into ${APP_ROOT}/.htaccess (release rules preserved)"
 
 # private/ must never be web-readable - it holds civicrm.settings.php, which
 # contains the DB credentials. Deny it explicitly rather than relying on the
