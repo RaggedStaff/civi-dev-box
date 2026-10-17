@@ -434,7 +434,8 @@ plus `http://localhost` for the version probe. It asserts:
 | `the database ... refused these credentials` | Wrong `dbPass`, or the `/var/lib/mysql` volume already holds a database — in which case the `MARIADB_*` variables were ignored and the old credentials are still in force. Delete the environment or the volume and re-import. |
 | `the database ... did not become reachable` | A connection problem, not a credentials one: nothing is listening, or the container is still initialising. Check the database node's status and logs. |
 | `...: unbound variable` | A script referenced an environment variable the manifest does not set, and `set -u` killed it. `make lint-unset` finds this class of bug before import. |
-| Site shows the **CiviCRM Installer** and `/civicrm/login` is 404 | `30-install-civicrm.sh` only checks that `private/civicrm.settings.php` *exists*; CiviCRM checks it can *load* it. A file that is unreadable by the webserver user, truncated, or has a PHP parse error passes the first test and fails the second. Run `make why-installer TARGET=root@<node>` — it names which. |
+| Site shows the **CiviCRM Installer** and `/civicrm/login` is 404 | Two different faults give this, and they need opposite fixes. **(a)** CiviCRM cannot load `private/civicrm.settings.php` — `30-install-civicrm.sh` only checks the file *exists*; CiviCRM checks it can *load* it, and a file that is unreadable by the webserver user, truncated, or has a PHP parse error passes the first test and fails the second. **(b)** the release's `.htaccess` rewrite rules are gone — see the row below. `make why-installer` names which of (a). |
+| Site is **installed** (login page reachable by any means) but `/civicrm/login` → 404 while `/` → 200 | **The rewrite rules are missing.** CiviCRM Standalone routes every URL that is not a file on disk through `index.php`; remove that and Apache serves only real files, so `/` and `/civicrm.standalone.php` return 200 — both are files — while `/civicrm/login`, which exists *only* as a rewrite, returns 404. An older `20-fetch-civicrm.sh` destroyed the release's `.htaccess` by overwriting it wholesale to add `php_value` directives. **Note every other health check probes a URL that needs no rewriting**, so they all report healthy. Run `make why-routing TARGET=root@<node>`, repair with `make restore-htaccess TARGET=root@<node>`. |
 | `make install` says "nothing to do" but the site is broken | The idempotency guard fired. That guard is a file-existence test only; do not trust it as proof the site works. Use `make why-installer`. |
 | Site returns **502** | Usually **Apache is not running at all**. The platform replaces the image's `CMD` with its own container agent, so `civi-foreground` never runs and nothing starts the web server. `apache2 -t` still reports a valid vhost, which makes this look like a config problem. Fix with `make start-web TARGET=root@<node>`; it is now also an install and restart hook. |
 | Browser warns about the certificate on a custom domain | Jelastic is serving its own wildcard (`*.jcloud-ver-jpe.ik-server.com`), which does not cover your domain. Enable Let's Encrypt for the domain in the dashboard — the CNAME alone does not provision a certificate. |
@@ -451,6 +452,8 @@ scripts/
   lib.sh                    shared helpers, path/DB discovery
   00-preflight.sh           fail fast on an unsatisfying runtime
   15-start-web.sh           start Apache + cron; the platform replaces our CMD
+  26-restore-htaccess.sh    put the release's .htaccess back if its rules were lost
+  96-why-routing.sh         /civicrm/login 404s while / returns 200
   97-why-installer.sh        site shows the installer but the settings file exists
   20-fetch-civicrm.sh       release code + bind volumes + .user.ini
   30-install-civicrm.sh     cv core:install, idempotent
@@ -467,6 +470,7 @@ tests/
   image-test.sh             boots the image, asserts it serves and denies private/
   db-wait-test.sh           wait_for_db against a real MariaDB, all four outcomes
   start-web-test.sh        starts Apache when the platform overrides the image CMD
+  htaccess-test.sh          .htaccess merge keeps the release's rewrite rules
   why-installer-test.sh    97-why-installer.sh reaches the right verdict for each cause
   build-from-git-test.sh  clone + build + deploy the extension, inside the image
   unset-env-test.py         fails on any reference `set -u` would turn fatal

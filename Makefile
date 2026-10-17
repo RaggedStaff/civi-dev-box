@@ -145,6 +145,19 @@ start-web: ## Start Apache and cron (the platform replaces the image's CMD)
 why-installer: ## Why is the site showing the installer instead of the login page?
 	$(SSHRUN) $(SCRIPTS)/97-why-installer.sh
 
+# /civicrm/login 404s while / returns 200. Every other check probes a URL that
+# needs no rewriting, so only this one can see a lost front controller.
+.PHONY: why-routing
+why-routing: ## Why does /civicrm/login 404 while / returns 200?
+	$(SSHRUN) $(SCRIPTS)/96-why-routing.sh
+
+# Repair for a .htaccess whose rewrite rules were destroyed by an older
+# 20-fetch-civicrm.sh. Fetches the authentic file from the release tarball and
+# re-merges the civi-dev-box block on top.
+.PHONY: restore-htaccess
+restore-htaccess: ## Put back the release's .htaccess if its rewrite rules were lost
+	$(SSHRUN) $(SCRIPTS)/26-restore-htaccess.sh
+
 # Re-run provisioning on the EXISTING box, without deleting and re-importing.
 # The fast iteration loop: fix a script, `make provision`, keep the volumes,
 # the database and the uploaded extension archive.

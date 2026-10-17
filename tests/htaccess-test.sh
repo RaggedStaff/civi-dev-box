@@ -221,6 +221,76 @@ else
   fail "/ -> ${CODE:-no response}, expected 200"
 fi
 
+# --- The diagnostic and the repair -------------------------------------------
+# A fault is only genuinely fixed if something can both detect it and repair it.
+# Every other health check in this repo probes a URL that needs no rewriting, so
+# why-routing is the first thing that can see this class of failure at all.
+echo
+echo "=== 96-why-routing.sh must SEE a broken rewrite ==="
+docker cp "$BOX/scripts/96-why-routing.sh" "$NAME:/tmp/96.sh" >/dev/null
+docker exec "$NAME" bash -c 'printf "# Managed by civi-dev-box\n  php_value memory_limit 512M\n" > /var/www/html/.htaccess'
+
+# Redirects below run on the HOST, so the log is a host file - grep it there.
+# Reading it with `docker exec ... grep ... /tmp/...` looks inside the container
+# instead, finds nothing, and fails every assertion for the wrong reason.
+BROKEN_LOG="$(mktemp)"
+if docker exec "$NAME" bash /tmp/96.sh >"$BROKEN_LOG" 2>&1; then
+  fail "why-routing exited 0 on a .htaccess with no RewriteRule"
+else
+  pass "why-routing exits non-zero when the rewrite is gone"
+fi
+
+if grep -q 'no RewriteRule' "$BROKEN_LOG"; then
+  pass "why-routing names the missing rewrite as the cause"
+else
+  fail "why-routing did not identify the missing RewriteRule"
+fi
+
+if grep -q 'restore-htaccess' "$BROKEN_LOG"; then
+  pass "why-routing points at the repair"
+else
+  fail "why-routing did not say how to repair it"
+fi
+
+echo
+echo "=== 26-restore-htaccess.sh must REPAIR it (downloads the release) ==="
+docker cp "$BOX/scripts/26-restore-htaccess.sh" "$NAME:/tmp/26.sh" >/dev/null
+RESTORE_LOG="$(mktemp)"
+if docker exec -e CIVICRM_APP_DIR=/var/www/html -e CIVICRM_VERSION="${CIVICRM_VERSION:-6.18.2}" \
+     "$NAME" bash /tmp/26.sh >"$RESTORE_LOG" 2>&1; then
+  pass "restore-htaccess exits 0"
+else
+  sed 's/^/  | /' "$RESTORE_LOG" | tail -8
+  fail "restore-htaccess exited non-zero"
+fi
+rm -f "$BROKEN_LOG" "$RESTORE_LOG"
+
+if docker exec "$NAME" grep -q 'RewriteRule' /var/www/html/.htaccess; then
+  pass "the release's rewrite rules are back"
+else
+  fail "restore did not put the rewrite rules back"
+fi
+
+if docker exec "$NAME" test -f /var/www/html/.htaccess.lost; then
+  pass "the mangled file was kept as .htaccess.lost (evidence preserved)"
+else
+  fail "restore destroyed the broken file instead of keeping it"
+fi
+
+if docker exec "$NAME" bash /tmp/96.sh >/dev/null 2>&1; then
+  pass "why-routing reports healthy after the repair"
+else
+  fail "why-routing still reports broken after the repair"
+fi
+
+CODE="$(docker exec "$NAME" curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+        http://127.0.0.1/civicrm/login 2>/dev/null)"
+if [ "$CODE" = "200" ]; then
+  pass "/civicrm/login -> 200 after repair"
+else
+  fail "/civicrm/login -> ${CODE:-no response} after repair"
+fi
+
 echo
 [ "$FAIL" -eq 0 ] && echo "  htaccess test PASSED" || echo "  htaccess test FAILED"
 exit "$FAIL"
