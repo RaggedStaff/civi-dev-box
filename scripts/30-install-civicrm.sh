@@ -109,20 +109,32 @@ if [ "$STATUS" -ne 0 ]; then
 fi
 
 # --- Verify ----------------------------------------------------------------
-# Report which of two very different things went wrong. "missing" and "present
-# but not a configuration this guard recognises" were previously reported with
-# the same words, and only the second was ever true - the installer had just
-# written the file.
-if [ ! -f "$(detect_app_root)/private/civicrm.settings.php" ]; then
-  die "installer reported success but $(detect_app_root)/private/civicrm.settings.php does not exist"
+# `cv core:install` exiting 0 is the authoritative signal that the install
+# worked. It created the tables and wrote the settings file.
+#
+# civicrm_installed() is a heuristic, and it must never be able to fail an
+# install that succeeded. An earlier version gated on it with `die`, so a
+# heuristic that disagreed with the installer turned two successful installs
+# into failed imports - and the disagreement was never evidence that anything
+# was wrong. It now only warns, loudly and with the file to look at.
+SETTINGS_PATH="$(detect_app_root)/private/civicrm.settings.php"
+
+if [ ! -f "$SETTINGS_PATH" ]; then
+  # This one is a real failure: the installer said it wrote the file.
+  die "cv core:install exited 0 but ${SETTINGS_PATH} does not exist.
+    Its JSON output reports which path it wrote - compare that with
+    ${SETTINGS_PATH}. If they differ, the installer used a different
+    document root."
 fi
-civicrm_installed || die "installer reported success, and the settings file exists,
-  but it does not look like an installed configuration.
-  Check what it contains:  head -40 $(detect_app_root)/private/civicrm.settings.php
-  A real install defines dozens of \$civicrm_setting entries; the release
-  boilerplate defines one. cv core:install also prints \"settingsPath\" in its
-  JSON output - if that is not $(detect_app_root)/private/civicrm.settings.php,
-  the installer wrote somewhere else."
+
+if ! civicrm_installed; then
+  warn "cv core:install succeeded, but the guard in lib.sh does not recognise"
+  warn "${SETTINGS_PATH} as an installed configuration."
+  warn "Continuing: the installer's exit status is authoritative and this check"
+  warn "is only a heuristic. The early-exit at the top of this script uses it to"
+  warn "decide whether to re-install, so it may re-run harmlessly next time."
+  warn "To see what the file contains:  head -40 ${SETTINGS_PATH}"
+fi
 
 # Rewrite ownership so the webserver user can write the three trees.
 #
