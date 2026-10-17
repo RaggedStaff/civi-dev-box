@@ -46,16 +46,30 @@ docker cp "$BOX/scripts/lib.sh" "$NAME:/tmp/lib.sh" >/dev/null
 # first reported "the RewriteRule was destroyed" for a file that had never been
 # written.
 #
-# The rules a CiviCRM Standalone release ships. /civicrm/login resolves through
-# these and through nothing else.
+# The rewrite rules the CiviCRM 6.18.2 Standalone release actually ships, copied
+# verbatim from civicrm-6.18.2-standalone.tar.gz rather than reconstructed.
+#
+# Note the target: index.php, NOT civicrm.standalone.php. The entry point's name
+# strongly suggests it is the rewrite target and the assumption is easy to make -
+# it is wrong, and it was wrong in this test before the real tarball was
+# unpacked. /civicrm/login falls through to index.php, the Standalone front
+# controller, which then routes into CiviCRM.
 docker exec -i "$NAME" bash -c 'cat > /tmp/release.htaccess' <<'HTA'
-DirectoryIndex index.php
+DirectoryIndex index.php index.html index.htm
+
+# Make CiviCRM handle any 404 errors.
+ErrorDocument 404 /index.php
+
+# Don't show directory listings for URLs which map to a directory.
+Options -Indexes
 
 <IfModule mod_rewrite.c>
-  RewriteEngine On
+  RewriteEngine on
+
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule ^(.*)$ civicrm.standalone.php [QSA,L]
+  RewriteCond %{REQUEST_URI} !=/favicon.ico
+  RewriteRule ^ index.php [L]
 </IfModule>
 HTA
 
@@ -82,8 +96,8 @@ else
   fail "htaccess_set_block exited non-zero"
 fi
 
-if docker exec "$NAME" grep -q 'RewriteRule ^(.*)\$ civicrm.standalone.php' /tmp/release.htaccess; then
-  pass "the release's RewriteRule survives"
+if docker exec "$NAME" grep -q 'RewriteRule \^ index.php \[L\]' /tmp/release.htaccess; then
+  pass "the release's RewriteRule to index.php survives"
 else
   fail "the release's RewriteRule was destroyed"
 fi
@@ -130,12 +144,15 @@ printf "<?php echo \"index\";"    > index.php
 printf "<?php echo \"standalone\";" > civicrm.standalone.php
 cat > .htaccess <<'"'"'HTA'"'"'
 DirectoryIndex index.php
+ErrorDocument 404 /index.php
+Options -Indexes
 
 <IfModule mod_rewrite.c>
-  RewriteEngine On
+  RewriteEngine on
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule ^(.*)$ civicrm.standalone.php [QSA,L]
+  RewriteCond %{REQUEST_URI} !=/favicon.ico
+  RewriteRule ^ index.php [L]
 </IfModule>
 HTA
 '

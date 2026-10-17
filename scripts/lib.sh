@@ -237,9 +237,20 @@ link_data_dirs() {
 # Why this exists
 # ---------------
 # An .htaccess file has more than one author. CiviCRM Standalone is a
-# front-controller app: /civicrm/login is not a path on disk, it is rewritten to
-# civicrm.standalone.php, and the rewrite rules that do that are shipped in the
-# release's own .htaccess. This box adds php_value directives on top.
+# front-controller app: /civicrm/login is not a path on disk. The release's
+# .htaccess ends its rewrite block with
+#
+#     RewriteCond %{REQUEST_FILENAME} !-f
+#     RewriteCond %{REQUEST_FILENAME} !-d
+#     RewriteCond %{REQUEST_URI} !=/favicon.ico
+#     RewriteRule ^ index.php [L]
+#
+# so the request falls through to index.php, which is the Standalone front
+# controller that then routes into CiviCRM. (civicrm.standalone.php is the entry
+# point it ultimately reaches, not the rewrite target - worth stating, because
+# the file name suggests otherwise and the assumption is easy to make.) That
+# .htaccess also carries ErrorDocument 404 /index.php, the FilesMatch deny list,
+# and the cache headers. This box adds php_value directives on top.
 #
 # The previous version wrote the whole file to add its part:
 #

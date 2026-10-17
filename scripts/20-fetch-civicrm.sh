@@ -172,8 +172,9 @@ htaccess_set_block "${APP_ROOT}/.htaccess" "$HTA_BEGIN" "$HTA_END" "$HTA_BLOCK" 
 if [ "$HAD_RELEASE_HTACCESS" -eq 1 ] \
    && ! grep -qiE '^[[:space:]]*RewriteRule' "${APP_ROOT}/.htaccess"; then
   warn "${APP_ROOT}/.htaccess contains no RewriteRule."
-  warn "CiviCRM Standalone routes /civicrm/* through civicrm.standalone.php by"
-  warn "rewriting; without that, /civicrm/login answers 404 while / answers 200."
+  warn "CiviCRM Standalone routes every URL that is not a real file through"
+  warn "index.php, its front controller; without that, /civicrm/login answers 404"
+  warn "while / answers 200, because / maps to a file and needs no routing."
   warn "Restore the .htaccess shipped in the release tarball if one was lost."
 fi
 log "merged civi-dev-box block into ${APP_ROOT}/.htaccess (release rules preserved)"
