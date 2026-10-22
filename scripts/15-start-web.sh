@@ -31,6 +31,19 @@ _CIVI_SELF="${BASH_SOURCE[0]:-$0}"
 
 log "=== start web server ==="
 
+# Repair the data tree's ownership before serving anything.
+#
+# Jelastic mounts a VOLUME over $CIVICRM_DATA_DIR, created root:root 0770, so
+# www-data can traverse none of it - the image's build-time chown does not reach
+# a mounted volume. That surfaces as CiviCRM's installer reporting that
+# private/civicrm.settings.php and private/cache "cannot be created", which reads
+# as a broken install. See fix_data_dir_access in lib.sh.
+#
+# Doing it here rather than only in 20-fetch-civicrm.sh: this is the script run
+# to bring a suspended or restarted node back, and a box that only ever runs
+# this would otherwise come up serving 403s from an untraversable private/.
+fix_data_dir_access || warn "data tree permissions could not be repaired"
+
 # Debian's apache2.conf interpolates ${APACHE_RUN_DIR} and friends; without
 # these, every apache2ctl invocation dies with a DefaultRuntimeDir error.
 if [ -r /etc/apache2/envvars ]; then

@@ -430,6 +430,8 @@ plus `http://localhost` for the version probe. It asserts:
 | `ONLY_FULL_GROUP_BY is ON` | The stock MariaDB image default. Not yet tuned — see *Known gaps*. |
 | `no civicrm cron entries` | Install `ops/crontab` (Dashboard → CUSTOMER → Cron Jobs). |
 | `/private/civicrm.settings.php` is reachable over HTTP | The image ships the deny rule, so this means the box is **not** running your image. Check `appImage` in the manifest matches what you pushed, and re-import. |
+| Installer shows `settingsWritable` / `templateCompilePathWritable` — *"cannot be created"* | **Not a permissions message about the file.** The data volume is `root:root` 0770 and `www-data` is neither owner nor in the group, so the `other` bits grant it nothing: it cannot traverse `private/`, read it, or create anything in it. Jelastic creates that volume at run time, which is why the image's build-time `chown` does not apply — a mounted volume is not affected by anything baked into the image. Both errors are fatal, so the box cannot re-install itself either. Fixed by `fix_data_dir_access` in `lib.sh`, run by `15-start-web.sh` and `20-fetch-civicrm.sh`; on an older box, `make start-web TARGET=root@<node>`. |
+| Installer shows **`CiviCRM MySQL connection: Connection refused`** | The database node is not reachable — usually stopped or suspended alongside the app node, or its address changed. This is separate from any application fault: nothing on the app node can fix it. Start the `sqldb` node and re-run `make install TARGET=root@<node>`. |
 | Import fails immediately with no script output | Almost always `appImage`: the platform could not pull the image. Check the tag exists and is public. |
 | `the database ... refused these credentials` | Wrong `dbPass`, or the `/var/lib/mysql` volume already holds a database — in which case the `MARIADB_*` variables were ignored and the old credentials are still in force. Delete the environment or the volume and re-import. |
 | `the database ... did not become reachable` | A connection problem, not a credentials one: nothing is listening, or the container is still initialising. Check the database node's status and logs. |
@@ -469,6 +471,7 @@ ops/
   crontab                   CiviCRM scheduled jobs
 tests/
   image-test.sh             boots the image, asserts it serves and denies private/
+  data-dirs-test.sh         www-data can actually use the mounted data volumes
   db-wait-test.sh           wait_for_db against a real MariaDB, all four outcomes
   start-web-test.sh        starts Apache when the platform overrides the image CMD
   htaccess-test.sh          .htaccess merge keeps the release's rewrite rules

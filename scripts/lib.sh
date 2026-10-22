@@ -86,7 +86,57 @@ data_public()  { printf '%s/public'   "$CIVICRM_DATA_DIR"; }
 data_ext()     { printf '%s/ext'      "$CIVICRM_DATA_DIR"; }
 
 ensure_data_dirs() {
-  mkdir -p "$(data_private)" "$(data_public)" "$(data_ext)"
+  local d
+  for d in "$(data_private)" "$(data_public)" "$(data_ext)"; do
+    mkdir -p "$d"
+  done
+  fix_data_dir_access
+}
+
+# Repair ownership and mode on the persistent data tree.
+#
+# The image chowns this tree to www-data at BUILD time, which is worthless at
+# run time: Jelastic mounts a VOLUME over $CIVICRM_DATA_DIR, and the platform
+# creates that volume root:root with mode 0770. www-data is then neither the
+# owner nor in the group, so only the "other" permission bits apply - and 0770
+# grants them nothing. The webserver can traverse the directory at all, cannot
+# read what is in it, and cannot create anything in it.
+#
+# Nothing says "permissions". CiviCRM's own installer reports it as:
+#
+#     settingsWritable         The settings file ".../private/civicrm.settings.php"
+#                              cannot be created. Ensure the parent folder is writable.
+#     templateCompilePathWritable
+#                              The template compile dir ".../private/cache"
+#                              cannot be created. Ensure the parent folder is writable.
+#
+# which reads as a failed installation rather than as "the volume is root:root".
+# Both of those are fatal to the installer, so a box in this state cannot even
+# re-install itself.
+fix_data_dir_access() {
+  local d
+  [ -d "$CIVICRM_DATA_DIR" ] || return 0
+
+  # Recursive, because cv core:install runs as root and creates private/cache
+  # and friends as root - fixing only the top level leaves the webserver able to
+  # enter the tree and unable to write inside it.
+  if ! chown -R www-data:www-data "$CIVICRM_DATA_DIR" 2>/dev/null; then
+    warn "could not chown ${CIVICRM_DATA_DIR} to www-data; the webserver may not"
+    warn "be able to read or write there, and CiviCRM will report it as"
+    warn "'cannot be created' rather than as a permission problem."
+    warn "  see:  ls -ld ${CIVICRM_DATA_DIR} $(data_private)"
+    warn "  fix:  chown -R www-data:www-data ${CIVICRM_DATA_DIR}"
+    return 1
+  fi
+
+  for d in "$(data_private)" "$(data_public)" "$(data_ext)"; do
+    [ -d "$d" ] || continue
+    # 2770: the group sticky bit so files created later keep the group, and the
+    # webserver owns the tree so the owner bits govern.
+    chmod 2770 "$d" 2>/dev/null \
+      || warn "could not chmod 2770 ${d}"
+  done
+  return 0
 }
 
 # --- Document root ----------------------------------------------------------

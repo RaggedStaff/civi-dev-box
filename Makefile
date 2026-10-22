@@ -236,6 +236,7 @@ image-push: ## Push the image so the platform can pull it
 .PHONY: image-test
 image-test: ## Boot the image and check it serves, denies private/, and survives a CMD override
 	@bash tests/image-test.sh
+	@bash tests/data-dirs-test.sh
 	@bash tests/start-web-test.sh
 	@bash tests/htaccess-test.sh
 	@bash tests/why-installer-test.sh
