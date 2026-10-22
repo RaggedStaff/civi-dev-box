@@ -151,6 +151,47 @@ else
   fail "www-data still cannot create after 15-start-web.sh"
 fi
 
+# --- The settings file must not be webserver-writable -------------------------
+# CiviCRM checks this and only warns, so a regression here is silent until it
+# appears as a warning during install. The recursive chown above hands the file
+# to www-data; ensure_data_dirs is supposed to take it back.
+echo
+echo "=== civicrm.settings.php must not be writable by the webserver ==="
+docker exec "$NAME" bash -c '
+  set -e
+  # Leave the file exactly as the recursive chown would: owned by www-data, and
+  # writable because it is the owner.
+  printf "<?php \$civicrm_setting[\"dsn\"]=\"stub\";" > /var/lib/civicrm-data/private/civicrm.settings.php
+  chown www-data:www-data /var/lib/civicrm-data/private/civicrm.settings.php
+  chmod 664 /var/lib/civicrm-data/private/civicrm.settings.php' >/dev/null
+
+docker exec -e CIVICRM_APP_DIR=/var/www/html "$NAME" bash -c \
+  '. /tmp/lib.sh; ensure_data_dirs' >/dev/null 2>&1
+
+OWN="$(docker exec "$NAME" stat -c '%U:%G' /var/lib/civicrm-data/private/civicrm.settings.php | tr -d ' ')"
+if [ "$OWN" = "root:root" ]; then
+  pass "settings file is root:root, not www-data"
+else
+  fail "settings file owner is ${OWN}, expected root:root (CiviCRM warns otherwise)"
+fi
+
+if docker exec "$NAME" bash -c \
+     "su -s /bin/bash www-data -c 'head -c 5 /var/www/html/private/civicrm.settings.php' >/dev/null 2>&1"; then
+  pass "www-data can still READ it"
+else
+  fail "www-data cannot read the settings file - the site will not boot"
+fi
+
+# The check CiviCRM makes: is_writable() as the webserver user must be false.
+if docker exec "$NAME" bash -c \
+     "su -s /bin/bash www-data -c 'echo x >> /var/www/html/private/civicrm.settings.php' 2>/dev/null"; then
+  fail "www-data CAN write it - CiviCRM reports settingsWritable"
+  docker exec "$NAME" bash -c \
+    'printf "<?php \$civicrm_setting[\"dsn\"]=\"stub\";" > /var/lib/civicrm-data/private/civicrm.settings.php' >/dev/null 2>&1
+else
+  pass "www-data cannot write it (settingsWritable would pass)"
+fi
+
 echo
 [ "$FAIL" -eq 0 ] && echo "  data-dirs test PASSED" || echo "  data-dirs test FAILED"
 exit "$FAIL"

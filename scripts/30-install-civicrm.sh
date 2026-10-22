@@ -90,6 +90,40 @@ esac
 
 DB_URL="mysql://${CIVICRM_DB_USER}:${CIVICRM_DB_PASS}@${DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}"
 
+# --- Reconcile with any existing settings file --------------------------------
+# cv core:install PROMPTS when one is already there:
+#
+#     Found existing civicrm.settings.php in /var/www/html/private
+#     The civicrm.settings.php already exists. What would you like to do?
+#       [a] Abort. (Default.) ...
+#      >
+#     [Exception]  Aborted
+#
+# With no TTY nothing answers, the default is Abort, and the install dies. It is
+# a contradiction between two decisions: this script judged the site NOT
+# installed (otherwise it exited at the guard above), while a settings file from
+# an earlier or partial attempt was still sitting on disk. The script lost the
+# argument by hanging on a question nobody could answer.
+#
+# So settle it here, where the reason can be logged, rather than letting cv
+# settle it silently. -f is cv's own answer for [o], "overwrite": appropriate
+# because the only way we reach this point is having already judged this file
+# not to be a usable configuration. Nothing recognised as good is discarded, and
+# the previous copy is kept either way - the same reasoning as .htaccess.lost.
+SETTINGS_FILE="${APP_ROOT}/private/civicrm.settings.php"
+if [ -f "$SETTINGS_FILE" ]; then
+  if cp -p "$SETTINGS_FILE" "${SETTINGS_FILE}.preinstall.bak" 2>/dev/null; then
+    log "kept the previous settings file as ${SETTINGS_FILE}.preinstall.bak"
+  else
+    warn "could not back up ${SETTINGS_FILE}"
+  fi
+  warn "an existing civicrm.settings.php will be OVERWRITTEN (-f)."
+  warn "  Reached only because the install guard judged it not usable, so this"
+  warn "  keeps nothing that was recognised as good."
+  warn "  To see what it contains: bash scripts/read-settings.php ${SETTINGS_FILE}"
+  EXTRA_ARGS+=( -f )
+fi
+
 log "running: cv core:install --cms-base-url=${SITE_URL} --db=mysql://*** ${EXTRA_ARGS[*]}"
 
 set +e

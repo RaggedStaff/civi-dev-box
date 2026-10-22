@@ -136,6 +136,25 @@ fix_data_dir_access() {
     chmod 2770 "$d" 2>/dev/null \
       || warn "could not chmod 2770 ${d}"
   done
+
+  # Except the settings file. It holds the database credentials and the
+  # encryption keys, so a compromise of the webserver must not be able to
+  # rewrite it, and CiviCRM checks exactly that:
+  #
+  #   WARNING: (system) settingsWritable: The settings file
+  #            "/var/www/html/private/civicrm.settings.php" should not be writable.
+  #
+  # The recursive chown above hands it to www-data, which - being the owner -
+  # makes it writable and trips that warning. Root owns it instead: root:root
+  # 0644 means the webserver can READ it (other-read) and cannot write it, which
+  # is the state both checks want. cv runs as root, so the installer can still
+  # create and replace it.
+  local settings
+  for settings in "$(data_private)/civicrm.settings.php" "${CIVICRM_APP_DIR:-}/private/civicrm.settings.php"; do
+    [ -n "$settings" ] && [ -f "$settings" ] || continue
+    chown root:root "$settings" 2>/dev/null || true
+    chmod 644 "$settings" 2>/dev/null || true
+  done
   return 0
 }
 
