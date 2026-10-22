@@ -90,6 +90,14 @@ wait_for_db()     { :; }
 generate_site_key(){ printf 'testsitekey'; }
 ensure_cv()       { printf %s $TMP/bin/cv; }
 civicrm_installed() { return 1; }
+
+# This test is about the -f decision, not about permissions. The real
+# settings_visible_to_web() would ask www-data to stat a file under mktemp's
+# 0700 directory and correctly say no, and the real ensure_data_dirs() would
+# chown /var/lib/civicrm-data on the HOST. Neither belongs here;
+# data-dirs-test.sh exercises visibility in a real container with www-data.
+settings_visible_to_web() { return 0; }
+ensure_data_dirs()        { :; }
 STUB
 
 cp "$BOX/scripts/30-install-civicrm.sh" "$TMP/30.sh"

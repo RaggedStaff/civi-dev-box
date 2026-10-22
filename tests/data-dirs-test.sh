@@ -192,6 +192,37 @@ else
   pass "www-data cannot write it (settingsWritable would pass)"
 fi
 
+# --- Can the webserver SEE the settings file? --------------------------------
+# This is the exact condition that decides between the CiviCRM site and its web
+# installer: WebEntrypoint::checkCiviInstalled() is `defined('CIVICRM_SETTINGS_PATH')`,
+# set only when bootSettings()'s file_exists() succeeds AS THE WEB USER. Root can
+# see every file, so root's view cannot prove this - which is how an install
+# reports success while the browser still shows the installer.
+echo
+echo "=== settings_visible_to_web (the installer-screen check) ==="
+if docker exec -e CIVICRM_APP_DIR=/var/www/html "$NAME" bash -c \
+     '. /tmp/lib.sh; settings_visible_to_web'; then
+  pass "www-data can see the settings file -> CiviCRM serves the site"
+else
+  fail "www-data cannot see the settings file -> CiviCRM would show its installer"
+fi
+
+# Reproduce the platform's original volume state around the file. Note it is the
+# DIRECTORY that matters, not the file's own mode: file_exists() only stats, so
+# a mode-000 file still "exists" and CiviCRM would serve a 500 rather than the
+# installer. A parent directory www-data cannot traverse is the real condition.
+docker exec "$NAME" bash -c \
+  'chown root:root /var/lib/civicrm-data/private && chmod 0770 /var/lib/civicrm-data/private' >/dev/null
+if docker exec -e CIVICRM_APP_DIR=/var/www/html "$NAME" bash -c \
+     '. /tmp/lib.sh; settings_visible_to_web'; then
+  fail "reported visible through a 0770 root:root directory - it cannot detect the installer condition"
+else
+  pass "reports invisible when www-data cannot traverse private/ (the real bug)"
+fi
+
+docker exec "$NAME" bash -c \
+  'chown www-data:www-data /var/lib/civicrm-data/private && chmod 2770 /var/lib/civicrm-data/private' >/dev/null
+
 echo
 [ "$FAIL" -eq 0 ] && echo "  data-dirs test PASSED" || echo "  data-dirs test FAILED"
 exit "$FAIL"

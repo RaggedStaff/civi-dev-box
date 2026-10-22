@@ -30,9 +30,30 @@ CIVICRM_APP_DIR="$APP_ROOT"
 cd "$APP_ROOT"
 
 # --- Already installed? -----------------------------------------------------
+# "Installed" is not enough. CiviCRM shows its web installer whenever the WEB
+# user cannot see the settings file, so an already-installed box can still be
+# broken in the browser - and exiting on the strength of root's view is what
+# made that state look permanent. Repair, then confirm.
 if civicrm_installed; then
-  log "civicrm.settings.php present - site already installed, nothing to do"
-  exit 0
+  log "civicrm.settings.php defines a database - site already installed"
+  if settings_visible_to_web; then
+    log "the webserver can load it - nothing to do"
+    exit 0
+  fi
+  warn "but the webserver cannot see it, so CiviCRM will show its web installer"
+  warn "  repairing data-dir ownership"
+  ensure_data_dirs >/dev/null 2>&1 || warn "ensure_data_dirs reported a problem"
+  if settings_visible_to_web; then
+    log "repaired: the webserver can now see it - nothing else to do"
+    exit 0
+  fi
+  die "the site IS installed, but the webserver cannot see
+    $(detect_app_root)/private/civicrm.settings.php
+    so CiviCRM shows its web installer instead of the site. Re-installing
+    cannot help: the database and the settings file are already correct.
+    Compare root's view with the webserver's:
+      ls -ld $(detect_app_root)/private $(data_private)
+      su -s /bin/sh www-data -c 'ls -l $(detect_app_root)/private/civicrm.settings.php'"
 fi
 
 # --- Settings --------------------------------------------------------------
@@ -213,6 +234,38 @@ fi
 # created later inherit the directory group.
 chmod -R u+rwX,g+rwX "$(data_private)" "$(data_public)" "$(data_ext)" 2>/dev/null || true
 chmod 2770 "$(data_private)" "$(data_public)" "$(data_ext)" 2>/dev/null || true
+
+# --- Can the WEBSERVER see the settings file? --------------------------------
+# Every check up to here ran as root, and root can see every file. CiviCRM
+# decides between the site and its web installer with
+# `defined('CIVICRM_SETTINGS_PATH')`, which is set only when bootSettings() finds
+# the file with file_exists() - as the WEB user. So a settings file root can
+# read and www-data cannot produces the worst possible result: this script
+# reports success, the database is installed, and the browser still shows the
+# installer. That is a permissions fault wearing a database fault's clothes.
+if settings_visible_to_web; then
+  log "the webserver can load ${SETTINGS_PATH}"
+else
+  warn "the webserver CANNOT see ${SETTINGS_PATH}"
+  warn "  CiviCRM shows its web installer whenever file_exists() is false for the"
+  warn "  web user, so the site will keep showing the installer however often the"
+  warn "  install runs. Repairing data-dir ownership and asking again."
+  ensure_data_dirs >/dev/null 2>&1 || warn "ensure_data_dirs reported a problem"
+  if settings_visible_to_web; then
+    log "repaired: the webserver can now see the settings file"
+  else
+    stat -c '    %n  %U:%G %a' "$SETTINGS_PATH" >&2 2>/dev/null || true
+    die "the webserver cannot see ${SETTINGS_PATH} even after repairing ownership.
+    This is the exact condition that makes CiviCRM display its installer: the
+    site is installed, but the web process cannot find the file.
+    Compare root's view with the webserver's:
+      ls -ld $(detect_app_root)/private $(data_private)
+      su -s /bin/sh www-data -c 'ls -l ${SETTINGS_PATH}'
+    If private/ is a symlink, its target must be traversable by www-data. If the
+    parent mode is 2770 and the owner is not www-data, the web user has no
+    access at all."
+  fi
+fi
 
 log "installed. log in at ${SITE_URL}/civicrm/login"
 log "admin user: ${CIVICRM_ADMIN_USER} <${CIVICRM_ADMIN_EMAIL}>"

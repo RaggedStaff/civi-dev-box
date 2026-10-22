@@ -134,6 +134,23 @@ else
   warn "deployed. Run 'make fetch TARGET=<node>'."
 fi
 
+# --- Can the web user actually load the settings file? -----------------------
+# CiviCRM shows its web installer whenever the WEB process cannot find
+# civicrm.settings.php: WebEntrypoint::checkCiviInstalled() is literally
+# `defined('CIVICRM_SETTINGS_PATH')`, which SettingsManager::bootSettings() sets
+# only when file_exists() succeeds for that user. fix_data_dir_access has just
+# run, so a failure here means something else - and the install itself is fine,
+# which is why re-installing never fixes it.
+SETTINGS_FILE="$(detect_app_root)/private/civicrm.settings.php"
+if [ -f "$SETTINGS_FILE" ] && ! settings_visible_to_web; then
+  warn "the webserver cannot see ${SETTINGS_FILE}, though root can."
+  warn "  The site will therefore show CiviCRM's web installer even though it is"
+  warn "  installed. Re-installing will not change what the browser shows."
+  warn "  Compare the two views:"
+  warn "    ls -ld $(detect_app_root)/private $(data_private)"
+  warn "    su -s /bin/sh www-data -c 'ls -l ${SETTINGS_FILE}'"
+fi
+
 # --- cron --------------------------------------------------------------------
 if pgrep -x cron >/dev/null 2>&1; then
   log "cron is running"

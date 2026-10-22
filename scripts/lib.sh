@@ -556,47 +556,78 @@ generate_site_key() {
 
 # Is the site genuinely installed?
 #
-# NOT "does the file exist". A CiviCRM release ships a boilerplate
-# private/civicrm.settings.php, so existence was never evidence of anything -
-# and it deadlocked: the guard reported "already installed", the install was
-# skipped forever, and CiviCRM kept showing its installer because the boilerplate
-# carries no database settings. Nothing in the loop could break it.
+# Answer with what CiviCRM itself uses, not with an invented shape. A real
+# install defines the CIVICRM_DSN constant; the Standalone web entrypoint
+# decides between the site and the web installer with `defined('CIVICRM_SETTINGS_PATH')`,
+# which SettingsManager::bootSettings() sets when it loads this file.
 #
-# So require the settings that only a real install writes. The header of the
-# boilerplate even says "CiviCRM version 5", which is a good illustration of how
-# little the file's presence says.
+# Two earlier versions of this guard invented something else, and both were wrong:
+#
+#   1. grep for $civicrm_setting['dsn'] - the DSN is a CONSTANT, not a setting.
+#   2. count($civicrm_setting) >= 3 - a real install has exactly ONE top-level
+#      key, 'domain' (an array of 6 upload/template directories). Verified by
+#      running `cv core:install` against a real MariaDB on the 6.18.2 release.
+#
+# Version 2 was the damaging one: it said "not installed" for every CORRECT
+# install, so the installer re-ran forever, and its disagreement with cv's own
+# "civicrm.settings.php already exists" prompt is what produced the interactive
+# Abort. The release ships private/ EMPTY - there is no boilerplate settings
+# file - so the file's presence is meaningful even though its shape is not.
 civicrm_installed() {
-  local app_root f n
+  local app_root f dsn
   app_root="$(detect_app_root)"
   f="${app_root}/private/civicrm.settings.php"
   [ -f "$f" ] || return 1
 
-  # LOAD the file and count what it defined, rather than pattern-matching its
-  # source. Two earlier attempts grepped for $civicrm_setting['dsn'] and similar
-  # and both were wrong: a genuine settings file from a release whose formatting
-  # differs matched neither, so a completed install was reported as "missing".
-  # Loading it is format-agnostic and is exactly what CiviCRM does.
-  #
-  # Run out-of-process: this file is PHP we do not control, and one die() taken
-  # inline would abort the caller.
-  n="$(php -r '
+  # Load it out-of-process and ask what it DEFINED. Out-of-process because this
+  # is PHP we do not control: one die() taken inline would abort the caller.
+  dsn="$(php -r '
     $f = $argv[1];
     $tmp = @tempnam(sys_get_temp_dir(), "ci");
     if (!$tmp) { exit(1); }
-    $child = "require \$argv[1]; \$d = null;"
-           . " foreach ([\"civicrm_setting\",\"civicrm_config\",\"settings\"] as \$n) {"
-           . "   if (isset(\$\$n) && is_array(\$\$n)) { \$d = \$\$n; break; } }"
-           . " file_put_contents(\$argv[2], json_encode(\$d));";
+    $child = "require \$argv[1];"
+           . " file_put_contents(\$argv[2], defined(\"CIVICRM_DSN\") ? CIVICRM_DSN : \"\");";
     exec(escapeshellarg(PHP_BINARY) . " -d display_errors=0 -d error_reporting=0 -r "
         . escapeshellarg($child) . " " . escapeshellarg($f) . " " . escapeshellarg($tmp) . " 2>/dev/null");
-    $d = json_decode(@file_get_contents($tmp), true);
+    $dsn = @file_get_contents($tmp);
     @unlink($tmp);
-    if (!is_array($d)) { exit(1); }
-    echo count($d);
+    if (!is_string($dsn)) { exit(1); }
+    echo $dsn;
   ' "$f" 2>/dev/null)" || return 1
 
-  # A real install writes dozens of settings. The release boilerplate writes one
-  # unrelated one. The threshold is deliberately low and the count is printed by
-  # the caller so a near-miss is visible rather than silent.
-  [ "${n:-0}" -ge 3 ]
+  # Present, non-empty, and not the template's literal placeholder
+  # (mysql://%%dbUser%%:%%dbPass%%@...), which is what an unrendered settings
+  # file would carry.
+  [ -n "$dsn" ] || return 1
+  case "$dsn" in *'%%'*) return 1 ;; esac
+  return 0
+}
+
+# Can the WEBSERVER load the settings file?
+#
+# This is the test CiviCRM actually makes:
+#
+#   SettingsManager::bootSettings()   if (file_exists($settingsPath)) { ... }
+#   WebEntrypoint::checkCiviInstalled()   return defined('CIVICRM_SETTINGS_PATH');
+#
+# so the web installer is shown exactly when file_exists() is false for the web
+# user - nothing to do with the database. Root can see every file, which makes
+# this the one check that root cannot fail: the install reports success, every
+# assertion passes, and the browser still shows the installer.
+#
+# Returns 0 when the webserver can see the file, or when we cannot drop
+# privileges to find out (never invent a failure); 1 when it demonstrably
+# cannot.
+settings_visible_to_web() {
+  local f user
+  f="$(detect_app_root)/private/civicrm.settings.php"
+
+  [ "$(id -u)" = "0" ] || return 0
+  command -v su >/dev/null 2>&1 || return 0
+  user="www-data"
+  id "$user" >/dev/null 2>&1 || return 0
+
+  # -e follows symlinks and needs execute permission on every parent directory,
+  # which is exactly what file_exists() needs.
+  su -s /bin/sh "$user" -c "test -e '$f'" >/dev/null 2>&1
 }

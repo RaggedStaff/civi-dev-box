@@ -72,8 +72,11 @@ echo
 echo "=== civicrm_installed(): existence is not installation ==="
 
 # The guard used to be a bare file test, which accepted this and called the site
-# installed. It is what a CiviCRM release ships: a license header and one
-# unrelated setting, no database. That is what deadlocked the install.
+# installed. It stands for a placeholder or half-written file: settings but no
+# database connection. Something like it is what deadlocked the install.
+#
+# (The release itself ships private/ EMPTY - verified against 6.18.2 - so this is
+# not a file a release provides. It is the shape a partial write can leave.)
 N2="civi-inv-test-$$"
 FIX="$(mktemp -d)"
 
@@ -89,11 +92,15 @@ $domain = array(1, 2, 3, 4, 5, 6);
 $civicrm_setting['domain'] = $domain;
 PHPX
 
+# A real install defines CIVICRM_DSN as a CONSTANT and puts only 'domain' in
+# $civicrm_setting - verified by running cv core:install against MariaDB. The
+# guard asks whether that constant is defined, which is what CiviCRM needs in
+# order to boot.
 cat > "$FIX/real.php" <<'PHPX'
 <?php
-$civicrm_setting['dsn'] = 'mysql:host=db;dbname=civicrm';
-$civicrm_setting['db_hostname'] = 'db';
-$civicrm_setting['database'] = 'civicrm';
+define('CIVICRM_DSN', 'mysql://civicrm:pw@db:3306/civicrm?new_link=true');
+define('CIVICRM_UF_BASEURL', 'https://dev.example.org');
+$civicrm_setting['domain']['uploadDir'] = '/var/lib/civicrm-data/private/upload';
 PHPX
 
 cat > "$FIX/comment.php" <<'PHPX'
@@ -104,23 +111,20 @@ PHPX
 
 # Real settings files are large and their formatting varies by release. The two
 # below differ from $FIX/real.php only in style - which is exactly what defeated
-# the earlier source-pattern greps, so both must be accepted.
+# the earlier source-pattern greps. Both must be accepted: the guard loads the
+# file, so PHP's parser decides, not a regex.
 cat > "$FIX/real-doublequoted.php" <<'PHPX'
 <?php
-$civicrm_setting["dsn"]="mysql:host=db;port=3306;dbname=civicrm";
-$civicrm_setting["db_username"]="civicrm";
-$civicrm_setting["database"]="civicrm";
-$civicrm_setting["siteKey"]="abc";
+define("CIVICRM_DSN", "mysql://civicrm:pw@db:3306/civicrm?new_link=true");
+$civicrm_setting["domain"]["uploadDir"] = "/var/lib/civicrm-data/private/upload";
 PHPX
 
 cat > "$FIX/real-spaced.php" <<'PHPX'
 <?php
 
-$civicrm_setting[ 'dsn' ] = 'mysql:host=db;dbname=civicrm';
+define ( 'CIVICRM_DSN' , 'mysql://civicrm:pw@db:3306/civicrm?new_link=true' ) ;
 
-$civicrm_setting[ 'db_hostname' ] = 'db';
-
-$civicrm_setting[ 'database' ] = 'civicrm';
+$civicrm_setting[ 'domain' ][ 'uploadDir' ] = '/var/lib/civicrm-data/private/upload' ;
 
 PHPX
 

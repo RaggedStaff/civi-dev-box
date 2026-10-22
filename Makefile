@@ -305,4 +305,5 @@ lint-unset: ## Fail on any variable reference that `set -u` would turn into a fa
 .PHONY: test
 test: shellcheck lint-unset validate check-docs ## Everything that does not need Docker
 	@bash tests/install-noninteractive-test.sh
+	@bash tests/install-guard-test.sh
 	@echo "  all static checks pass"
