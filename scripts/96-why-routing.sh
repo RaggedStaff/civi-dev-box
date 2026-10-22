@@ -53,8 +53,15 @@ for _ in $(seq 1 10); do
 done
 if [ -z "$PORT" ]; then
   die "nothing is listening on 80, 8080 or 8000.
-  Ports open: $(listening_ports | tr '\n' ' ').
-  This is not a routing problem - there is no web server. Run 98-why-502.sh."
+  Ports actually open: $(listening_ports | tr '\n' ' ')
+  (Only 22 means SSH is up and the web server never started - which is what the
+  platform does, because its container agent is PID 1 and our image's CMD never
+  runs. A suspended environment that is started again is the usual trigger:
+  that fires onAfterStartNode, not onAfterRestartNode.)
+
+  This is not a routing problem, so restoring .htaccess would not help.
+  Repair it:      make start-web TARGET=<node>     (runs 15-start-web.sh)
+  If that does not bring it up, diagnose: make why-502 TARGET=<node>"
 fi
 log "listening on port ${PORT}"
 

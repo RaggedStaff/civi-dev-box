@@ -267,6 +267,14 @@ validate: ## Sanity-check the manifest locally
 	             print('  events  :', [k for k in d if k.startswith('on')]); \
 	             assert all('image' in n and 'nodeType' not in n for n in d['nodes']), \
 	               'a node still declares nodeType - custom images should not'; \
+	             _ev = {k.split()[0]: k for k in d if k.startswith('on')}; \
+	             _need = ['onInstall', 'onAfterRestartNode', 'onAfterStartNode']; \
+	             _missing = [n for n in _need if n not in _ev]; \
+	             assert not _missing, \
+	               'manifest is missing lifecycle hook(s): %s - a Jelastic environment ' \
+	               'that is SUSPENDED and later STARTED fires onAfterStartNode, not ' \
+	               'onAfterRestartNode, so without it the node comes back with no web ' \
+	               'server at all and only port 22 answering' % _missing; \
 	             print('  OK')"
 
 .PHONY: check-docs
