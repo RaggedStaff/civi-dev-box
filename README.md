@@ -244,7 +244,7 @@ The form pre-fills every setting. Check these three and leave the rest alone:
 | Field | Should be | Why it matters |
 | --- | --- | --- |
 | `appImage` | your image from step 1 | **wrong here and the install fails immediately** |
-| `siteUrl` | *blank* — use the environment's own URL | baked in at install. The environment URL is the host the platform's TLS certificate covers; a custom domain without a matching certificate loads the page but not its scripts. To change it later: `make set-base-url URL=https://host`. |
+| `siteUrl` | *blank* — use the environment's own URL | baked in at install. The environment URL is the host the platform's TLS certificate covers; a custom domain without a matching certificate loads the page but not its scripts. The platform only knows that URL after the environment exists, so the `onInstall` command injects it. If the deployment log says `site url: http://localhost`, the placeholder did not resolve — put the URL in this field and re-import. To change it later: `make set-base-url URL=https://host`. |
 | `extSource` | *blank* | only for a git-hosted copy of the extension; this box deploys it separately in step 6 |
 
 Then click **Install**. Progress shows under the environment as it goes; the
