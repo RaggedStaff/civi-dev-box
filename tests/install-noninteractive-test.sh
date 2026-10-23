@@ -103,8 +103,8 @@ STUB
 cp "$BOX/scripts/30-install-civicrm.sh" "$TMP/30.sh"
 
 run_case() {
-  # $1 = case name, $2 = create settings file? (yes/no)
-  local with_settings="$2"
+  # $1 = case name, $2 = create settings file? (yes/no), $3 = where the URL comes from
+  local with_settings="$2" url_src="${3:-site-url}"
   local app="$TMP/app-$1"
   rm -rf "$app"; mkdir -p "$app/private" "$app/core"
   printf '<?php echo 1;' > "$app/civicrm.standalone.php"
@@ -112,9 +112,21 @@ run_case() {
     printf '<?php $civicrm_setting["dsn"]="stale";' > "$app/private/civicrm.settings.php"
   fi
 
-  APP="$app" ARGV_OUT="$TMP/argv-$1" \
-  CIVICRM_DB_PASS=testpass CIVICRM_ADMIN_PASS=testadmin \
-  CIVICRM_SITE_URL=https://example.org \
+  local -a vars=(
+    "APP=$app"
+    "ARGV_OUT=$TMP/argv-$1"
+    "CIVICRM_DB_PASS=testpass"
+    "CIVICRM_ADMIN_PASS=testadmin"
+  )
+  case "$url_src" in
+    site-url) vars+=( "CIVICRM_SITE_URL=https://example.org" ) ;;
+    env-url)  vars+=( "CIVICRM_ENV_URL=https://env.example.org" ) ;;
+    none)     ;;
+  esac
+
+  # Clear anything inherited from the caller so each case really tests what it
+  # says it does.
+  env -u CIVICRM_SITE_URL -u CIVICRM_ENV_URL "${vars[@]}" \
     bash "$TMP/30.sh" >"$TMP/out-$1" 2>&1
 }
 
@@ -159,6 +171,36 @@ if grep -qx 'core:install' "$TMP/argv-fresh"; then
   pass "cv core:install was actually invoked"
 else
   fail "cv core:install was not invoked - the other assertions prove nothing"
+fi
+
+echo
+echo "=== case C: site-url setting blank, the environment URL is supplied ==="
+# This is the exact shape of a fresh platform import: the operator leaves the
+# optional site-url setting empty, so the manifest passes ${env.url} in a
+# separate variable. The install used to die here with
+#
+#     line 74: ${env.url}: bad substitution
+#
+# because ${env.url} is JPS syntax and bash rejects a parameter name containing
+# '.'. It stayed hidden while CIVICRM_SITE_URL was always non-empty, since bash
+# expands the fallback of ${a:-${b}} lazily.
+if run_case envurl no env-url 2>"$TMP/err3"; then
+  pass "the script exits 0"
+else
+  sed 's/^/  | /' "$TMP/out-envurl" | tail -12
+  fail "the script exited non-zero"
+fi
+
+if grep -qi 'bad substitution' "$TMP/out-envurl"; then
+  fail "died with 'bad substitution' - JPS syntax reached bash"
+else
+  pass "no bash 'bad substitution'"
+fi
+
+if grep -qx -- '--cms-base-url=https://env.example.org' "$TMP/argv-envurl"; then
+  pass "cv was given the environment URL as the base URL"
+else
+  fail "cv did not receive --cms-base-url=https://env.example.org (argv: $(tr '\n' ' ' < "$TMP/argv-envurl" 2>/dev/null))"
 fi
 
 echo

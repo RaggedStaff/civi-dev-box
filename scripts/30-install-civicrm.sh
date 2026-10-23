@@ -70,9 +70,21 @@ DB_HOST="$(resolve_db_host)"
 [ -n "$CIVICRM_ADMIN_PASS" ] || die "CIVICRM_ADMIN_PASS must be provided"
 
 # The site URL is baked into the install. On Jelastic this is the environment
-# URL, passed in by the manifest as CIVICRM_SITE_URL.
-SITE_URL="${CIVICRM_SITE_URL:-${env.url}}"
-: "${SITE_URL:=http://localhost}"
+# URL, passed in by the manifest as CIVICRM_SITE_URL (or CIVICRM_ENV_URL when the
+# operator left the site-url setting blank).
+#
+# NOT ${env.url}: that is JPS syntax, and bash rejects a parameter name containing
+# '.', so `${env.url}` dies with "bad substitution" the moment it is evaluated.
+# It stayed hidden only because CIVICRM_SITE_URL was always non-empty and bash
+# expands the fallback of ${a:-${b}} lazily - then a fresh import with a blank
+# setting evaluated it and the whole install hook failed.
+SITE_URL="${CIVICRM_SITE_URL:-${CIVICRM_ENV_URL:-}}"
+if [ -z "$SITE_URL" ]; then
+  SITE_URL="http://localhost"
+  warn "neither CIVICRM_SITE_URL nor CIVICRM_ENV_URL is set - using ${SITE_URL}"
+  warn "on a platform import that bakes the wrong base URL: the page loads and its"
+  warn "scripts do not. Set CIVICRM_SITE_URL and re-run before installing."
+fi
 SITE_URL="${SITE_URL%/}"
 log "site url:  ${SITE_URL}"
 log "database:  ${CIVICRM_DB_USER}@${DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}"

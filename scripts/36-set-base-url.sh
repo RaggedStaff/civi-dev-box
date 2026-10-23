@@ -24,7 +24,7 @@
 #
 # Usage:
 #   bash 36-set-base-url.sh https://civi-dev.jcloud-ver-jpe.ik-server.com
-#   bash 36-set-base-url.sh            # $CIVICRM_SITE_URL, then Jelastic $env.url
+#   bash 36-set-base-url.sh            # CIVICRM_SITE_URL, then CIVICRM_ENV_URL
 set -euo pipefail
 # shellcheck source=lib.sh
 _CIVI_SELF="${BASH_SOURCE[0]:-$0}"
@@ -36,9 +36,11 @@ _CIVI_SELF="${BASH_SOURCE[0]:-$0}"
 
 log "=== set civicrm base url ==="
 
-NEW_URL="${1:-${CIVICRM_SITE_URL:-${env.url:-}}}"
+# CIVICRM_ENV_URL is the environment URL the manifest passes in. NOT ${env.url}:
+# that is JPS syntax, and bash rejects parameter names containing '.' outright.
+NEW_URL="${1:-${CIVICRM_SITE_URL:-${CIVICRM_ENV_URL:-}}}"
 [ -n "$NEW_URL" ] || die "usage: bash $0 https://host[:port]
-    (or set CIVICRM_SITE_URL)"
+    (or set CIVICRM_SITE_URL / CIVICRM_ENV_URL)"
 NEW_URL="${NEW_URL%/}"
 case "$NEW_URL" in
   http://*|https://*) ;;

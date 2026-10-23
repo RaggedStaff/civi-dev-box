@@ -97,11 +97,11 @@ settings:
     - caption: Site URL
       type: string
       name: siteUrl
-      default: "${env.url}"
+      default: ""
       hideLabel: false
       description: |
-        Baked into the install by `cv core:install --cms-base-url`. The default is
-        this environment's own URL, which is the host the platform's TLS
+        Baked into the install by `cv core:install --cms-base-url`. Leave blank to
+        use this environment's own URL, which is the host the platform's TLS
         certificate actually covers. A custom domain that is not covered by that
         certificate will load the page but not its scripts - the browser fetches
         them from the baked URL, refuses the mismatch, and the Angular login form
@@ -246,6 +246,11 @@ nodes:
       CIVICRM_DATA_DIR: ${settings.dataDir}
       CIVICRM_VERSION: ${settings.civicrmVersion}
       CIVICRM_SITE_URL: ${settings.siteUrl}
+      # ${env.url} is resolved HERE, by the platform - it must never reach a
+      # shell script, where ${env.url} is a "bad substitution" (bash parameter
+      # names cannot contain a dot). Scripts fall back to this when the site-url
+      # setting is blank.
+      CIVICRM_ENV_URL: ${env.url}
       CIVICRM_DB_NAME: civicrm
       CIVICRM_DB_USER: civicrm
       CIVICRM_DB_PASS: ${settings.dbPass}
@@ -357,18 +362,18 @@ onAfterStartNode [cp]:
   - cmd [cp]: bash "$HOME/.civi-scripts/20-fetch-civicrm.sh"
   - cmd [cp]: bash "$HOME/.civi-scripts/30-install-civicrm.sh"
 
-startPage: ${settings.siteUrl}/civicrm/login
+startPage: ${env.url}/civicrm/login
 
 success: |
   ### CiviCRM dev box is ready
 
-  - **Site**: ${settings.siteUrl}/civicrm/login
+  - **Site**: ${env.url}/civicrm/login
   - **Admin**: `${settings.adminEmail}` / the admin password you chose
   - **CiviCRM**: ${settings.civicrmVersion} &nbsp;&nbsp; **Demo data**: ${settings.demoData}
 
   #### 1. Confirm private/ is not web-readable
 
-      curl -sI ${settings.siteUrl}/private/civicrm.settings.php   # expect 403
+      curl -sI ${env.url}/private/civicrm.settings.php   # expect 403
 
   The image ships that deny rule, so it is already in place.
 

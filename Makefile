@@ -286,6 +286,26 @@ validate: ## Sanity-check the manifest locally
 	               'onAfterRestartNode, so without it the node comes back with no web ' \
 	               'server at all and only port 22 answering' % _missing; \
 	             print('  OK')"
+	@# ${env.x} is Jelastic JPS syntax, not bash. Bash rejects a parameter name
+	@# containing '.', so ${env.x} is a "bad substitution" the moment it is
+	@# evaluated - and it stayed hidden for weeks because bash expands the
+	@# fallback of ${a:-${b}} lazily. Only a blank setting reached it, and then a
+	@# whole fresh import died in the install hook. Fail here instead.
+	@# Comment lines are excluded: the scripts document this trap by name.
+	@bad=$$(grep -rnF '$${env.' $(SCRIPTS)/*.sh | grep -vE ':[0-9]+:[[:space:]]*#' || true); \
+	if [ -n "$$bad" ]; then \
+	  echo '  $${env.x} in a bash script - bash cannot expand a name containing a dot'; \
+	  printf '%s\n' "$$bad" | sed 's/^/    /'; \
+	  exit 1; \
+	fi
+	@# A settings default is not a place ${env.x} resolves either: the platform
+	@# fills in node env values, not form defaults, and the import receives "".
+	@# The env: block is where ${env.url} belongs.
+	@if grep -nE '^[[:space:]]*default:.*env\.' jps/*.jps >/dev/null 2>&1; then \
+	  echo '  a settings default references env.* - it does not resolve and arrives empty'; \
+	  grep -nE '^[[:space:]]*default:.*env\.' jps/*.jps | sed 's/^/    /'; \
+	  exit 1; \
+	fi
 
 .PHONY: check-docs
 check-docs: ## Every `make <target>` mentioned in the docs must actually exist

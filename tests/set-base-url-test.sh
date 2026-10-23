@@ -69,8 +69,16 @@ PHPX
 
 run() {  # $1 = app root, rest = args
   local d="$1"; shift
-  APP="$d" CV_LOG="$TMP/cv.log" CIVICRM_APP_DIR="$d" \
+  env -u CIVICRM_SITE_URL -u CIVICRM_ENV_URL \
+    APP="$d" CV_LOG="$TMP/cv.log" CIVICRM_APP_DIR="$d" \
     bash "$TMP/36.sh" "$@" >"$TMP/out" 2>&1
+}
+
+run_env() {  # $1 = app root, rest = extra env assignments
+  local d="$1"; shift
+  env -u CIVICRM_SITE_URL -u CIVICRM_ENV_URL \
+    APP="$d" CV_LOG="$TMP/cv.log" CIVICRM_APP_DIR="$d" "$@" \
+    bash "$TMP/36.sh" >"$TMP/out" 2>&1
 }
 
 echo "=== rebase to a new host ==="
@@ -152,6 +160,35 @@ if run "$APP4" "$NEW"; then
   fail "accepted a settings file that does not define CIVICRM_UF_BASEURL"
 else
   pass "refuses a settings file with no base URL to rebase"
+fi
+
+echo
+echo "=== no argument: fall back to the environment URL ==="
+# The platform passes ${env.url} in CIVICRM_ENV_URL. It must NOT be expanded as
+# ${env.url} in bash: a parameter name cannot contain '.', and that is a fatal
+# "bad substitution" - the bug that killed a fresh import.
+APP5="$(make_app five)"
+if run_env "$APP5" CIVICRM_ENV_URL=https://env.example.org; then
+  GOT5="$(php -r 'require $argv[1]; echo CIVICRM_UF_BASEURL;' "$APP5/private/civicrm.settings.php" 2>/dev/null)"
+  [ "$GOT5" = "https://env.example.org" ] \
+    && pass "uses CIVICRM_ENV_URL when no argument is given" \
+    || fail "used '${GOT5}', expected https://env.example.org"
+else
+  sed 's/^/  | /' "$TMP/out" | tail -8
+  fail "exited non-zero when only CIVICRM_ENV_URL was set"
+fi
+
+echo
+echo "=== no argument and no URL at all ==="
+APP6="$(make_app six)"
+if run "$APP6"; then
+  fail "accepted a run with no URL to move to"
+else
+  if grep -qi 'bad substitution' "$TMP/out"; then
+    fail "died with 'bad substitution' instead of a usage message"
+  else
+    pass "refuses with a usage message, not a bash error"
+  fi
 fi
 
 echo

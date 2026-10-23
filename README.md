@@ -244,7 +244,7 @@ The form pre-fills every setting. Check these three and leave the rest alone:
 | Field | Should be | Why it matters |
 | --- | --- | --- |
 | `appImage` | your image from step 1 | **wrong here and the install fails immediately** |
-| `siteUrl` | `https://dev.civi.sioldata.com` | baked into the install; changing it later means re-installing |
+| `siteUrl` | *blank* — use the environment's own URL | baked in at install. The environment URL is the host the platform's TLS certificate covers; a custom domain without a matching certificate loads the page but not its scripts. To change it later: `make set-base-url URL=https://host`. |
 | `extSource` | *blank* | only for a git-hosted copy of the extension; this box deploys it separately in step 6 |
 
 Then click **Install**. Progress shows under the environment as it goes; the
@@ -322,7 +322,6 @@ curl -sG "${JELASTIC_API}/environment/control/importmanifest" \
   --data-urlencode "session=${JELASTIC_SESSION}" \
   --data-urlencode "manifestUrl=${JPS_URL}" \
   --data-urlencode "envName=civi-dev" \
-  --data-urlencode "siteUrl=https://dev.civi.sioldata.com" \
   --data-urlencode "appImage=<your-dockerhub-user>/civi-dev-box:8.5.11" \
   --data-urlencode "dbImage=mariadb:12.3" \
   --data-urlencode "demoData=false"
@@ -440,6 +439,7 @@ plus `http://localhost` for the version probe. It asserts:
 | `the database ... did not become reachable` | A connection problem, not a credentials one: nothing is listening, or the container is still initialising. Check the database node's status and logs. |
 | `...: unbound variable` | A script referenced an environment variable the manifest does not set, and `set -u` killed it. `make lint-unset` finds this class of bug before import. |
 | **The page loads but the login form is missing — only the CiviCRM logo appears** | The login form is not in the HTML; it is injected by AngularJS (`<crm-login>` inside `<crm-angular-js>`), while the logo is a plain `<img>`. So this means the JavaScript never ran. The usual cause is a **base-URL / certificate mismatch**: `cv core:install` bakes the site URL into `civicrm.settings.php` in **seven** places (six `$civicrm_paths[*]['url']` entries plus `CIVICRM_UF_BASEURL`), and every script is fetched from that host. If the site is reached on a domain the TLS certificate does not cover, the browser refuses those subresources and only the static markup renders. Re-point it with `make set-base-url URL=https://<the-host-the-certificate-covers>` (or `scripts/36-set-base-url.sh <url>`), which rewrites all seven and flushes the caches. Confirm with `grep -cF '<old-host>' /var/www/html/private/civicrm.settings.php` — it must be 0. |
+| Import fails in the install hook: `30-install-civicrm.sh: line 74: ${env.url}: bad substitution` | **`${env.url}` is Jelastic JPS syntax, not bash.** A bash parameter name cannot contain a dot, so the expansion is a fatal error the moment it is evaluated. It survived until a site-url setting arrived **empty**, because bash only expands the fallback of `${a:-${b}}` when `a` is blank. The manifest now resolves `${env.url}` itself and passes it as `CIVICRM_ENV_URL`, and the scripts fall back to that. Pull the current manifest and re-import; `make validate` now refuses `${env.*}` in any script, so it cannot come back. |
 | Site shows the **CiviCRM Installer** and `/civicrm/login` is 404 | CiviCRM cannot load `private/civicrm.settings.php`, or the release's `.htaccess` rewrite rules are gone — see the next row for how to tell them apart. `30-install-civicrm.sh` now measures the first case as `www-data` (`settings_visible_to_web`), because that is the exact test CiviCRM makes: `WebEntrypoint::checkCiviInstalled()` is `defined('CIVICRM_SETTINGS_PATH')`, set only when `file_exists()` succeeds for the web user. `make why-installer` is the diagnostic. |
 | Site is **installed** (login page reachable by any means) but `/civicrm/login` → 404 while `/` → 200 | **The rewrite rules are missing.** CiviCRM Standalone routes every URL that is not a file on disk through `index.php`; remove that and Apache serves only real files, so `/` and `/civicrm.standalone.php` return 200 — both are files — while `/civicrm/login`, which exists *only* as a rewrite, returns 404. An older `20-fetch-civicrm.sh` destroyed the release's `.htaccess` by overwriting it wholesale to add `php_value` directives. **Note every other health check probes a URL that needs no rewriting**, so they all report healthy. Run `make why-routing TARGET=root@<node>`, repair with `make restore-htaccess TARGET=root@<node>`. |
 | `make install` says "nothing to do" but the site is broken | The idempotency guard fired. That guard is a file-existence test only; do not trust it as proof the site works. Use `make why-installer`. |
