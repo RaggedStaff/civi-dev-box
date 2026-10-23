@@ -277,6 +277,13 @@ validate: ## Sanity-check the manifest locally
 	             print('  events  :', [k for k in d if k.startswith('on')]); \
 	             assert all('image' in n and 'nodeType' not in n for n in d['nodes']), \
 	               'a node still declares nodeType - custom images should not'; \
+	             _bad = [k for n in d['nodes'] for k, v in (n.get('env') or {}).items() \
+	                     if '\$${env.' in str(v)]; \
+	             assert not _bad, \
+	               'node env references \$${env.*}: %s - the env block is evaluated ' \
+	               'while the environment is being created, before it has a URL, so ' \
+	               'those placeholders never resolve. Pass them in an onInstall cmd.' \
+	               % _bad; \
 	             _ev = {k.split()[0]: k for k in d if k.startswith('on')}; \
 	             _need = ['onInstall', 'onAfterRestartNode', 'onAfterStartNode']; \
 	             _missing = [n for n in _need if n not in _ev]; \

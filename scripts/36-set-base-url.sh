@@ -95,19 +95,42 @@ log "backup:   ${BACKUP}"
 # Literal replacement, not sed. A URL contains / . : ? and &, every one of which
 # means something to a regex, and a missed occurrence stays invisible until a
 # browser refuses the asset.
-N="$(php -r '
-  $f = $argv[1]; $old = $argv[2]; $new = $argv[3];
-  $s = file_get_contents($f);
-  if ($s === false) { fwrite(STDERR, "cannot read $f\n"); exit(1); }
-  $n = substr_count($s, $old);
-  if ($n === 0) { fwrite(STDERR, "the literal $old does not appear in $f\n"); exit(2); }
-  if (file_put_contents($f, str_replace($old, $new, $s)) === false) {
-    fwrite(STDERR, "cannot write $f\n"); exit(1);
-  }
-  echo $n;
-' "$SETTINGS" "$OLD_URL" "$NEW_URL")" || die "rewrite failed - ${SETTINGS} is unchanged"
+#
+# Returns the number of replacements on stdout; exits 3 when the literal is not
+# present at all (so an optional second pass can be skipped).
+replace_literal() {
+  php -r '
+    $f = $argv[1]; $old = $argv[2]; $new = $argv[3];
+    $s = file_get_contents($f);
+    if ($s === false) { fwrite(STDERR, "cannot read $f\n"); exit(1); }
+    $n = substr_count($s, $old);
+    if ($n === 0) { exit(3); }
+    if (file_put_contents($f, str_replace($old, $new, $s)) === false) {
+      fwrite(STDERR, "cannot write $f\n"); exit(1);
+    }
+    echo $n;
+  ' "$1" "$2" "$3"
+}
 
-log "replaced ${N} occurrence(s)"
+N="$(replace_literal "$SETTINGS" "$OLD_URL" "$NEW_URL")" \
+  || die "rewrite failed - ${SETTINGS} is unchanged"
+
+log "replaced ${N} occurrence(s) of ${OLD_URL}"
+
+# CiviCRM renders some resource URLs with the scheme of the incoming request, so
+# the same host can appear as both http:// and https://. Replacing only the exact
+# old base URL would leave the other form pointing at the old host, and the
+# symptom would be identical - the browser refuses those scripts.
+ALT_URL=""
+case "$OLD_URL" in
+  http://*)  ALT_URL="https://${OLD_URL#http://}" ;;
+  https://*) ALT_URL="http://${OLD_URL#https://}" ;;
+esac
+if [ -n "$ALT_URL" ]; then
+  if N2="$(replace_literal "$SETTINGS" "$ALT_URL" "$NEW_URL")"; then
+    log "replaced ${N2} occurrence(s) of the other-scheme form ${ALT_URL}"
+  fi
+fi
 
 # Verify by loading, not by reading the source: this is what CiviCRM will see.
 GOT="$(read_base_url "$SETTINGS")" \
@@ -117,11 +140,14 @@ GOT="$(read_base_url "$SETTINGS")" \
 
 # Anything still pointing at the old host is an asset URL that will fail in the
 # browser exactly as before, so treat it as a failure rather than a note.
-if grep -qF -- "$OLD_URL" "$SETTINGS"; then
-  die "the old URL still appears in ${SETTINGS} after the rewrite.
+for u in "$OLD_URL" "$ALT_URL"; do
+  [ -n "$u" ] || continue
+  if grep -qF -- "$u" "$SETTINGS"; then
+    die "the old URL still appears in ${SETTINGS} after the rewrite.
     Inspect it with:
-      grep -nF '${OLD_URL}' ${SETTINGS}"
-fi
+      grep -nF '${u}' ${SETTINGS}"
+  fi
+done
 
 log "CIVICRM_UF_BASEURL and every \$civicrm_paths url now point at ${NEW_URL}"
 

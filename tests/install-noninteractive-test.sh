@@ -121,6 +121,7 @@ run_case() {
   case "$url_src" in
     site-url) vars+=( "CIVICRM_SITE_URL=https://example.org" ) ;;
     env-url)  vars+=( "CIVICRM_ENV_URL=https://env.example.org" ) ;;
+    placeholder) vars+=( "CIVICRM_ENV_URL=\${env.url}" ) ;;
     none)     ;;
   esac
 
@@ -201,6 +202,31 @@ if grep -qx -- '--cms-base-url=https://env.example.org' "$TMP/argv-envurl"; then
   pass "cv was given the environment URL as the base URL"
 else
   fail "cv did not receive --cms-base-url=https://env.example.org (argv: $(tr '\n' ' ' < "$TMP/argv-envurl" 2>/dev/null))"
+fi
+
+echo
+echo "=== case D: the placeholder arrives UNRESOLVED ==="
+# This is what a platform does when it cannot resolve ${env.url} at that point in
+# the manifest: the literal string is handed to the container. Baking it would
+# produce a page that loads while every script is fetched from "localhost" - the
+# exact symptom that sent us here. Refusing is the only safe answer.
+rm -f "$TMP/argv-placeholder"
+if run_case placeholder no placeholder 2>"$TMP/err4"; then
+  fail "accepted '${env.url}' as a base URL and installed anyway"
+else
+  pass "refuses to install with an unresolved placeholder"
+fi
+
+if grep -q 'not a URL' "$TMP/out-placeholder"; then
+  pass "the error says the value is not a URL"
+else
+  fail "the error does not explain the problem: $(tail -3 "$TMP/out-placeholder" | tr '\n' ' ')"
+fi
+
+if [ -s "$TMP/argv-placeholder" ] && grep -qx 'core:install' "$TMP/argv-placeholder"; then
+  fail "cv core:install ran anyway - a broken site would have been baked"
+else
+  pass "cv core:install was never invoked"
 fi
 
 echo

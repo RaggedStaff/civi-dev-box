@@ -79,19 +79,28 @@ DB_HOST="$(resolve_db_host)"
 # expands the fallback of ${a:-${b}} lazily - then a fresh import with a blank
 # setting evaluated it and the whole install hook failed.
 SITE_URL="${CIVICRM_SITE_URL:-${CIVICRM_ENV_URL:-}}"
-case "$SITE_URL" in
-  http://*|https://*) ;;
-  *)
-    # Covers both "nobody set it" and "a JPS placeholder arrived unexpanded"
-    # (which would be the literal string ${env.url}). Either way it is not a URL,
-    # and baking it produces a site whose page loads and whose scripts do not.
-    warn "site URL is empty or not a URL ('${SITE_URL:-<empty>}') - using http://localhost"
-    warn "if this is a platform import, stop: the base URL would be wrong and the"
-    warn "asset URLs would point somewhere the browser cannot load. Set"
-    warn "CIVICRM_SITE_URL (or CIVICRM_ENV_URL) and re-run."
-    SITE_URL="http://localhost"
-    ;;
-esac
+if [ -n "$SITE_URL" ]; then
+  case "$SITE_URL" in
+    http://*|https://*) ;;
+    *)
+      # A non-empty value that is not a URL is an unresolved JPS placeholder -
+      # typically the literal "${env.url}" reaching the container because the
+      # node `env` block is evaluated before the environment exists. Installing
+      # anyway bakes a base URL the browser cannot load, and the result looks
+      # like a half-working site rather than a failed install. Refuse instead.
+      die "the base URL is not a URL: '${SITE_URL}'
+    That is a JPS placeholder that reached the shell unresolved, not a host.
+    Pass the real URL:
+      CIVICRM_SITE_URL=https://your.host bash $0"
+      ;;
+  esac
+else
+  SITE_URL="http://localhost"
+  warn "neither CIVICRM_SITE_URL nor CIVICRM_ENV_URL is set - using ${SITE_URL}"
+  warn "that is right for a local container only. A platform import must pass one"
+  warn "of them, or the page loads while its scripts point at a host the browser"
+  warn "cannot reach."
+fi
 SITE_URL="${SITE_URL%/}"
 log "site url:  ${SITE_URL}"
 log "database:  ${CIVICRM_DB_USER}@${DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}"

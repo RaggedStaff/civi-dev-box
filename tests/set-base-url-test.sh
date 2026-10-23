@@ -62,6 +62,9 @@ $civicrm_paths['civicrm.packages']['url'] = 'https://old.example.org/core/packag
 if (!defined('CIVICRM_UF_BASEURL')) {
   define('CIVICRM_UF_BASEURL', 'https://old.example.org');
 }
+// CiviCRM can render the same host under either scheme; a leftover reference in
+// the other scheme must be rewritten too.
+// previous base: http://old.example.org
 define('CIVICRM_SITE_KEY', 'KEEP-ME-INTACT');
 PHPX
   printf '%s' "$d"
@@ -102,9 +105,15 @@ else
 fi
 
 NEWCOUNT="$(grep -cF -- "$NEW" "$APP1/private/civicrm.settings.php")"
-[ "$NEWCOUNT" = "7" ] \
-  && pass "all 7 baked-in URLs moved (1 UF_BASEURL + 6 civicrm_paths)" \
-  || fail "found ${NEWCOUNT} occurrences of the new host, expected 7 - a path was missed"
+[ "$NEWCOUNT" = "8" ] \
+  && pass "all 8 URLs moved (7 baked-in + 1 other-scheme leftover)" \
+  || fail "found ${NEWCOUNT} occurrences of the new host, expected 8 - a path was missed"
+
+if grep -qF 'http://old.example.org' "$APP1/private/civicrm.settings.php"; then
+  fail "the other-scheme form of the old host survived - a browser would still refuse it"
+else
+  pass "the other-scheme form of the old host was rewritten too"
+fi
 
 if grep -qF 'KEEP-ME-INTACT' "$APP1/private/civicrm.settings.php"; then
   pass "unrelated settings are untouched"
