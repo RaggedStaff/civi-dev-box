@@ -97,11 +97,17 @@ settings:
     - caption: Site URL
       type: string
       name: siteUrl
-      default: "https://dev.civi.sioldata.com"
+      default: "${env.url}"
       hideLabel: false
       description: |
-        Baked into the install by `cv core:install --cms-base-url`. Must be the
-        final stable URL - changing it later means re-installing.
+        Baked into the install by `cv core:install --cms-base-url`. The default is
+        this environment's own URL, which is the host the platform's TLS
+        certificate actually covers. A custom domain that is not covered by that
+        certificate will load the page but not its scripts - the browser fetches
+        them from the baked URL, refuses the mismatch, and the Angular login form
+        never appears. To move an installed site, use `make set-base-url
+        URL=https://host` (scripts/36-set-base-url.sh), which rewrites all seven
+        places the base URL is stored.
 
     - caption: Application image
       type: string

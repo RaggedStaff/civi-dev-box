@@ -129,6 +129,15 @@ fetch: ## Re-materialise the release code and bind volumes
 install: ## Run the non-interactive CiviCRM installer (idempotent)
 	$(SSHRUN) $(SCRIPTS)/30-install-civicrm.sh
 
+# Re-point an installed site at another host. The base URL is baked into
+# civicrm.settings.php in seven places; updating only one leaves the assets on
+# the old host, which a browser refuses when the certificate does not match.
+# See 36-set-base-url.sh.
+.PHONY: set-base-url
+set-base-url: ## Re-point the site: make set-base-url URL=https://host
+	@[ -n "$(URL)" ] || { echo "usage: make set-base-url URL=https://host"; exit 1; }
+	$(SSHRUN) "CIVICRM_SITE_URL='$(URL)' $(SCRIPTS)/36-set-base-url.sh"
+
 .PHONY: health
 health: ## Full healthcheck: runtime, layout, DB, extension, cron
 	$(SSHRUN) $(SCRIPTS)/90-healthcheck.sh
@@ -306,4 +315,5 @@ lint-unset: ## Fail on any variable reference that `set -u` would turn into a fa
 test: shellcheck lint-unset validate check-docs ## Everything that does not need Docker
 	@bash tests/install-noninteractive-test.sh
 	@bash tests/install-guard-test.sh
+	@bash tests/set-base-url-test.sh
 	@echo "  all static checks pass"
