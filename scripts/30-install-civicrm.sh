@@ -79,12 +79,19 @@ DB_HOST="$(resolve_db_host)"
 # expands the fallback of ${a:-${b}} lazily - then a fresh import with a blank
 # setting evaluated it and the whole install hook failed.
 SITE_URL="${CIVICRM_SITE_URL:-${CIVICRM_ENV_URL:-}}"
-if [ -z "$SITE_URL" ]; then
-  SITE_URL="http://localhost"
-  warn "neither CIVICRM_SITE_URL nor CIVICRM_ENV_URL is set - using ${SITE_URL}"
-  warn "on a platform import that bakes the wrong base URL: the page loads and its"
-  warn "scripts do not. Set CIVICRM_SITE_URL and re-run before installing."
-fi
+case "$SITE_URL" in
+  http://*|https://*) ;;
+  *)
+    # Covers both "nobody set it" and "a JPS placeholder arrived unexpanded"
+    # (which would be the literal string ${env.url}). Either way it is not a URL,
+    # and baking it produces a site whose page loads and whose scripts do not.
+    warn "site URL is empty or not a URL ('${SITE_URL:-<empty>}') - using http://localhost"
+    warn "if this is a platform import, stop: the base URL would be wrong and the"
+    warn "asset URLs would point somewhere the browser cannot load. Set"
+    warn "CIVICRM_SITE_URL (or CIVICRM_ENV_URL) and re-run."
+    SITE_URL="http://localhost"
+    ;;
+esac
 SITE_URL="${SITE_URL%/}"
 log "site url:  ${SITE_URL}"
 log "database:  ${CIVICRM_DB_USER}@${DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}"
