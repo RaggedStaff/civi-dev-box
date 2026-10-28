@@ -391,6 +391,49 @@ htaccess_set_block() {
   return 0
 }
 
+# The .htaccess installed into core/.
+#
+# Refuse PHP, and ONLY PHP. CiviCRM Standalone serves its own JavaScript and CSS
+# from /core/ - $civicrm_paths['civicrm.root']['url'] is <base>/core - so a
+# blanket "Require all denied" here 403s every asset on the login page. The page
+# still renders, because the logo is a plain <img>, but Angular never loads and
+# the browser console says only "Loading failed for the <script>". Nothing
+# points at the rule, and /civicrm/login keeps returning 200, so it reads as a
+# broken release rather than as a permissions problem.
+#
+# This lives in a function so tests/core-assets-test.sh can feed the exact text
+# below to real Apache and measure what it serves, instead of duplicating the
+# rule and testing the copy.
+core_htaccess() {
+  cat <<'HTA'
+# Managed by civi-dev-box - core/ is not a public entrypoint.
+<FilesMatch "\.php$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+HTA
+}
+
+# The .htaccess installed into private/. Denied outright: this tree holds
+# civicrm.settings.php, with the database credentials and encryption keys.
+private_htaccess() {
+  cat <<'HTA'
+# Managed by civi-dev-box - private/ holds DB credentials and uploads.
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Order allow,deny
+  Deny from all
+</IfModule>
+HTA
+}
+
 # ---------------------------------------------------------------------------
 # PHP checks
 # ---------------------------------------------------------------------------

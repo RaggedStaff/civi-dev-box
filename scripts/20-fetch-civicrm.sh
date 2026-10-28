@@ -182,31 +182,14 @@ log "merged civi-dev-box block into ${APP_ROOT}/.htaccess (release rules preserv
 # private/ must never be web-readable - it holds civicrm.settings.php, which
 # contains the DB credentials. Deny it explicitly rather than relying on the
 # release's own rules, which have been observed to be absent from some builds.
-# Both Apache 2.2 and 2.4 syntax, so this works either way.
-cat > "${APP_ROOT}/private/.htaccess" <<'HTA'
-# Managed by civi-dev-box - private/ holds DB credentials and uploads.
-<IfModule mod_authz_core.c>
-  Require all denied
-</IfModule>
-<IfModule !mod_authz_core.c>
-  Order allow,deny
-  Deny from all
-</IfModule>
-HTA
+private_htaccess > "${APP_ROOT}/private/.htaccess"
 log "wrote ${APP_ROOT}/private/.htaccess (deny all)"
 
-# core/ contains PHP internals that must not be executed directly. Apache runs
-# .php under mod_php here, so deny rather than rely on routing.
-cat > "${APP_ROOT}/core/.htaccess" <<'HTA'
-# Managed by civi-dev-box - core/ is not a public entrypoint.
-<IfModule mod_authz_core.c>
-  Require all denied
-</IfModule>
-<IfModule !mod_authz_core.c>
-  Order allow,deny
-  Deny from all
-</IfModule>
-HTA
+# core/ contains PHP internals that must not be executed directly, but it also
+# holds the JavaScript and CSS CiviCRM serves to the login page. See
+# core_htaccess in lib.sh: the rule refuses PHP only.
+core_htaccess > "${APP_ROOT}/core/.htaccess"
+log "wrote ${APP_ROOT}/core/.htaccess (PHP denied, assets served)"
 
 log "installed civicrm version marker: $(cat "${APP_ROOT}/core/civicrm/version.php" 2>/dev/null | grep -o "VERSION = '[^']*'" || echo 'unknown')"
 log "=== fetch complete ==="

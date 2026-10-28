@@ -248,6 +248,7 @@ image-test: ## Boot the image and check it serves, denies private/, and survives
 	@bash tests/data-dirs-test.sh
 	@bash tests/start-web-test.sh
 	@bash tests/htaccess-test.sh
+	@bash tests/core-assets-test.sh
 	@bash tests/why-installer-test.sh
 	@bash tests/read-settings-test.sh
 	@bash tests/build-from-git-test.sh
